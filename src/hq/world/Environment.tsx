@@ -1,4 +1,4 @@
-// De omgeving van het hoofdkantoor: een landelijk perceel in Haspengouw.
+// De omgeving van het hoofdkantoor: een landelijk perceel.
 // Straat met kasseien en bakstenen pilaren, groene smeedijzeren hekken, lange grindoprit,
 // een groot gazon met hagen, hoeves met rode pannendaken en boomgaarden erachter.
 import { useLayoutEffect, useMemo, useRef } from 'react';
@@ -374,7 +374,7 @@ function Conifer({ position, scale = 1 }: { position: [number, number, number]; 
   );
 }
 
-/** Haspengouwse boomgaard: rijen laagstamfruitbomen. */
+/** Boomgaard: rijen laagstamfruitbomen. */
 function Orchard({ x0, z0, cols, rows }: { x0: number; z0: number; cols: number; rows: number }) {
   const trunks = useRef<THREE.InstancedMesh>(null);
   const crowns = useRef<THREE.InstancedMesh>(null);
