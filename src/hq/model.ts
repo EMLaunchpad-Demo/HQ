@@ -3,7 +3,7 @@
 import { useSyncExternalStore } from 'react';
 import { config } from '../config';
 import { onActivity } from '../live';
-import type { Agent, HqFloor } from '../types';
+import type { Agent, HqFloor, LiveEvent } from '../types';
 
 export interface HqTaak {
   id: string;
@@ -134,7 +134,18 @@ export interface LiveWork {
   task: string;
   since: number;
   done?: string;
+  /** Wat hij nu doet, in gewone taal ("zoekt in Apollo"), uit de laatste stap. */
+  doing?: string;
+  /** Aantal stappen (tool-oproepen) sinds de start. */
+  steps?: number;
+  /** Zijn eigen stappenplan in Claude Code: zoveel van zoveel klaar. Zonder plan geen percentage. */
+  plan?: { done: number; total: number };
+  /** Laatste teken van leven. */
+  at?: number;
 }
+
+/** Percentage uit het stappenplan van de agent, of null als hij er (nog) geen heeft. */
+export const livePct = (w?: LiveWork) => (w?.plan && w.plan.total > 0 ? Math.round((w.plan.done / w.plan.total) * 100) : null);
 
 type Bron = 'notion' | 'momentopname' | 'geen' | 'laden';
 
@@ -331,9 +342,40 @@ export function startHqData() {
   void load().then(plan);
 
   // Zelfde stroom als het organigram (main.tsx opent ze al): geen extra verbinding.
-  onActivity((e) => {
-    if (e.t === 'start') hqStore.set((s) => ({ live: { ...s.live, [e.agent]: { task: e.task, since: Date.now() } } }));
+  const apply = (e: LiveEvent, now = Date.now()) => {
+    const upd = (agent: string, f: (w: LiveWork) => LiveWork) =>
+      hqStore.set((s) => {
+        const w = s.live[agent];
+        // Een stap van iemand die al klaar was (of nog niet gestart): dan is hij opnieuw bezig.
+        const base: LiveWork = !w || w.done ? { task: w?.done ? w.task : '', since: now, steps: 0 } : w;
+        return { live: { ...s.live, [agent]: { ...f(base), at: now } } };
+      });
+    if (e.t === 'start') hqStore.set((s) => ({ live: { ...s.live, [e.agent]: { task: e.task, since: now, steps: 0, at: now } } }));
+    else if (e.t === 'stap') upd(e.agent, (w) => ({ ...w, doing: e.doing, steps: (w.steps ?? 0) + 1 }));
+    else if (e.t === 'voortgang') upd(e.agent, (w) => ({ ...w, plan: { done: e.done, total: e.total } }));
+    else if (e.t === 'plan')
+      upd(e.agent, (w) => {
+        const p = w.plan ?? { done: 0, total: 0 };
+        return { ...w, plan: e.op === 'nieuw' ? { ...p, total: p.total + 1 } : { ...p, done: Math.min(p.total, p.done + 1) } };
+      });
     else if (e.t === 'done' || e.t === 'error')
-      hqStore.set((s) => ({ live: { ...s.live, [e.agent]: { task: s.live[e.agent]?.task ?? '', since: Date.now(), done: e.t === 'done' ? e.result : 'Gestopt' } } }));
-  });
+      hqStore.set((s) => {
+        const w = s.live[e.agent];
+        const plan = w?.plan && e.t === 'done' ? { done: w.plan.total, total: w.plan.total } : w?.plan;
+        return { live: { ...s.live, [e.agent]: { task: w?.task ?? '', since: now, steps: w?.steps, plan, at: now, done: e.t === 'done' ? e.result : 'Gestopt' } } };
+      });
+   };
+  // Eerst wat er de laatste uren gebeurde (wie is nog bezig, hoe ver), dan live verder.
+  // Live berichten die intussen binnenkomen, wachten tot dat ingelezen is. Online bestaat dit niet (404): gewoon live.
+  let wacht: LiveEvent[] | null = [];
+  onActivity((e) => (wacht ? wacht.push(e) : apply(e)));
+  void fetch('/hq/activiteit', { cache: 'no-store', signal: AbortSignal.timeout(8_000) })
+    .then((r) => (r.ok ? r.json() : []))
+    .catch(() => [])
+    .then((lijst: unknown) => {
+      if (Array.isArray(lijst)) for (const e of lijst as (LiveEvent & { tijd?: string })[]) if (e && typeof e.t === 'string') apply(e, Date.parse(e.tijd ?? '') || Date.now());
+      const rest = wacht ?? [];
+      wacht = null;
+      rest.forEach((e) => apply(e));
+    });
 }

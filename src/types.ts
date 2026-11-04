@@ -43,7 +43,13 @@ export type LiveEvent =
   | { t: 'tool'; agent: string; tool: string }
   | { t: 'memory'; agent: string; file: string }
   | { t: 'done'; agent: string; result: string }
-  | { t: 'error'; agent: string; message: string };
+  | { t: 'error'; agent: string; message: string }
+  /** Eén stap van een agent (een tool-oproep), met wat hij nu doet in gewone taal. */
+  | { t: 'stap'; agent: string; doing: string }
+  /** Het stappenplan van een agent (zijn takenlijst in Claude Code): zoveel van zoveel klaar. */
+  | { t: 'voortgang'; agent: string; done: number; total: number }
+  /** Een taak in het stappenplan erbij of afgewerkt (nieuwere Claude Code: TaskCreate/TaskUpdate). */
+  | { t: 'plan'; agent: string; op: 'nieuw' | 'klaar' };
 
 /** Eén bericht in een chat van de team-app. */
 export interface ChatMessage {

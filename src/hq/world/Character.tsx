@@ -92,6 +92,8 @@ export interface CharacterProps {
   /** Typt hij/zij (animatie)? */
   working?: boolean;
   label?: boolean;
+  /** Live onder de naam: percentage en huidige stap (enkel als hij werkt). */
+  status?: string;
   big?: boolean;
   onClick?: (e: ThreeEvent<MouseEvent>) => void;
   selected?: boolean;
@@ -99,7 +101,7 @@ export interface CharacterProps {
   lite?: boolean;
 }
 
-export function Character({ id, name, shirt, mood, pose = 'zit', working, label, big, onClick, selected, lite }: CharacterProps) {
+export function Character({ id, name, shirt, mood, pose = 'zit', working, label, status, big, onClick, selected, lite }: CharacterProps) {
   const h = hash(id);
   const skin = SKIN[h % SKIN.length];
   const hair = HAIR[(h >> 3) % HAIR.length];
@@ -296,6 +298,11 @@ export function Character({ id, name, shirt, mood, pose = 'zit', working, label,
           <Text font={FONT} fontSize={big ? 0.15 : 0.12} color="#ffffff" outlineWidth={0.016} outlineColor="#0b1526" anchorY="bottom">
             {name}
           </Text>
+          {status && (
+            <Text font={FONT} fontSize={big ? 0.085 : 0.075} color="#2ff0a6" outlineWidth={0.012} outlineColor="#0b1526" anchorY="top" position-y={-0.015}>
+              {status}
+            </Text>
+          )}
         </Billboard>
       )}
       {selected && (

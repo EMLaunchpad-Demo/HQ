@@ -10,7 +10,7 @@ import type { ThreeEvent } from '@react-three/fiber';
 import { FONT, FONT_MONO, FONT_REGULAR } from '../fonts';
 import { brandGradientTex, carpetTex, cedarTex, concretePanelTex, concreteTex, corrugatedTex, screenTex, walnutTex, woodTex, zincTex } from '../textures';
 import { config } from '../../config';
-import { floors, isBusy, isOpen, isOverdue, takenStand, tasksByOwner, useHq, warRoomTasks, type FloorModel, type HqTaak, type LiveWork, type Occupant } from '../model';
+import { floors, isBusy, isOpen, isOverdue, livePct, takenStand, tasksByOwner, useHq, warRoomTasks, type FloorModel, type HqTaak, type LiveWork, type Occupant } from '../model';
 import { ui, useUi } from '../ui';
 import { useCall } from '../call';
 import { Character, MOOD_COLOR, type Mood } from './Character';
@@ -31,7 +31,8 @@ const LIVE_MS = 30 * 60_000;
 
 /** `takenOk` = false als Notion niet bereikbaar is of de lijst verouderd: dan nooit "niets open", maar grijs (onbekend). */
 export function moodOf(tasks: HqTaak[] = [], live?: LiveWork, takenOk = true): Mood {
-  if (live && !live.done && Date.now() - live.since < LIVE_MS) return 'bezig';
+  // Bezig zolang er tekens van leven komen (elke stap); na een half uur stilte niet meer.
+  if (live && !live.done && Date.now() - (live.at ?? live.since) < LIVE_MS) return 'bezig';
   if (tasks.some(isBusy)) return 'bezig';
   if (tasks.some((t) => t.status === 'Volgende')) return 'volgende';
   if (tasks.some(isOpen)) return 'open';
@@ -107,7 +108,16 @@ const click = (id: string, level: number) => (e: ThreeEvent<MouseEvent>) => {
   ui.set({ focus: id, level });
 };
 
+/** Wat er live onder de naam staat: "60% · zoekt in Apollo", enkel zolang de agent werkt. */
+function liveStatus(w: LiveWork | undefined, mood: Mood) {
+  if (!w || w.done || mood !== 'bezig') return undefined;
+  const pct = livePct(w);
+  const parts = [pct !== null ? `${pct}%` : null, w.doing ?? null].filter(Boolean);
+  return parts.length ? parts.join(' · ') : 'bezig';
+}
+
 function Seat({ o, mood, ctx, big, pose = 'zit' }: { o: Occupant; mood: Mood; ctx: Ctx; big?: boolean; pose?: 'zit' | 'staat' }) {
+  const status = o.kind === 'rol' ? undefined : liveStatus(ctx.live[o.id], mood);
   return (
     <group position-z={pose === 'zit' ? 0.62 : 0}>
       <Character
@@ -117,7 +127,8 @@ function Seat({ o, mood, ctx, big, pose = 'zit' }: { o: Occupant; mood: Mood; ct
         mood={mood}
         pose={pose}
         working={mood === 'bezig'}
-        label={ctx.active && (o.kind === 'hoofd' || o.kind === 'cos' || o.kind === 'mens')}
+        label={!!status || (ctx.active && (o.kind === 'hoofd' || o.kind === 'cos' || o.kind === 'mens'))}
+        status={status}
         big={big}
         selected={ctx.focus === o.id}
         lite={!ctx.active}

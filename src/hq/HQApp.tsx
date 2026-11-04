@@ -5,7 +5,7 @@ import { ArrowLeft, Bell, Building2, ChevronDown, ExternalLink, Mic, MicOff, Pho
 import { config, fileUrl } from '../config';
 import { Logo } from '../components/Logo';
 import { HqScene } from './Scene';
-import { floors, humans, isBusy, isOpen, isOverdue, progress, startHqData, tasksByOwner, useHq, useTakenStand, warRoomTasks, type FloorModel, type HqTaak, type Occupant } from './model';
+import { floors, humans, isBusy, isOpen, isOverdue, livePct, progress, startHqData, tasksByOwner, useHq, useTakenStand, warRoomTasks, type FloorModel, type HqTaak, type LiveWork, type Occupant } from './model';
 import { ui, useUi } from './ui';
 import { accept, call, decline, hangup, nameOf, setMe, startPresence, toggleCam, toggleMute, useCall, ZELF_KIEZEN } from './call';
 import { meldingenAanzetten, meldingenToestemming } from './bel';
@@ -85,6 +85,56 @@ function TaskRow({ t }: { t: HqTaak }) {
   );
 }
 
+const duur = (ms: number) => {
+  const m = Math.max(0, Math.round(ms / 60_000));
+  return m < 1 ? 'net' : m < 60 ? `${m} min` : `${Math.floor(m / 60)} u ${m % 60} min`;
+};
+
+/** Live wat een agent nu doet, rechtstreeks uit Claude Code: opdracht, stappenplan in procent, huidige stap en tijd. */
+function LiveCard({ w }: { w: LiveWork }) {
+  // Elke 20 seconden opnieuw tekenen, zodat "bezig sinds" meeloopt.
+  const [, tick] = useState(0);
+  useEffect(() => {
+    const iv = setInterval(() => tick((n) => n + 1), 20_000);
+    return () => clearInterval(iv);
+  }, []);
+  const pct = livePct(w);
+  const stil = !w.done && Date.now() - (w.at ?? w.since) > 30 * 60_000;
+  const kop = w.done ? 'Net klaar' : stil ? 'Geen teken van leven' : 'Nu live';
+  return (
+    <div className="mt-2 space-y-1.5 rounded-lg px-2.5 py-2 text-[12px] text-hi" style={{ background: w.done || stil ? 'rgba(255,255,255,0.04)' : 'rgba(47,240,166,0.08)' }}>
+      <div className="flex items-center justify-between gap-2 font-mono text-[10px] uppercase tracking-wider">
+        <span className={w.done || stil ? 'text-mid' : 'text-mint'}>
+          {!w.done && !stil && <span className="mr-1.5 inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-[#2ff0a6] align-middle" />}
+          {kop}
+        </span>
+        <span className="text-dim">{w.done ? `${duur(Date.now() - w.since)} geleden` : `bezig sinds ${duur(Date.now() - w.since)}`}</span>
+      </div>
+      {w.task && <div className="leading-snug">{w.task}</div>}
+      {pct !== null && (
+        <div>
+          <div className="mb-1 flex justify-between font-mono text-[10px] uppercase tracking-wider text-dim">
+            <span>
+              Stappenplan · {w.plan!.done} van {w.plan!.total} klaar
+            </span>
+            <span className="text-white">{pct}%</span>
+          </div>
+          <Bar pct={pct} />
+        </div>
+      )}
+      {!w.done && w.doing && (
+        <div className="text-[11.5px] text-mid">
+          <span className="font-mono text-[10px] uppercase tracking-wider text-dim">Nu · </span>
+          {w.doing}
+          {w.steps ? <span className="text-dim"> · stap {w.steps}</span> : null}
+        </div>
+      )}
+      {pct === null && !w.done && !w.doing && <div className="text-[11.5px] text-dim">Begint eraan.</div>}
+      {w.done && <div className="text-[11.5px] text-mid">{w.done}</div>}
+    </div>
+  );
+}
+
 function PersonBlock({ o, tasks, roles, focus }: { o: Occupant; tasks: HqTaak[]; roles?: Occupant[]; focus: string | null }) {
   const live = useHq((s) => s.live[o.id]);
   const stand = useTakenStand();
@@ -110,12 +160,7 @@ function PersonBlock({ o, tasks, roles, focus }: { o: Occupant; tasks: HqTaak[];
           <div className="truncate text-[12px] text-mid">{o.title}</div>
         </div>
       </div>
-      {live && (
-        <div className="mt-2 rounded-lg px-2.5 py-1.5 text-[12px] text-hi" style={{ background: 'rgba(47,240,166,0.08)' }}>
-          <span className="font-mono text-[10px] uppercase tracking-wider text-mint">{live.done ? 'Net klaar' : 'Nu live'} · </span>
-          {live.done ?? live.task}
-        </div>
-      )}
+      {live && <LiveCard w={live} />}
       <div className="mt-3 flex items-center justify-between font-mono text-[10px] uppercase tracking-wider text-dim">
         <span>{p.busy} bezig · {p.open} open · {p.done} klaar</span>
         <span>{p.pct}%</span>
