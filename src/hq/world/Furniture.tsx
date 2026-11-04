@@ -172,7 +172,7 @@ export function MeetingTable({ length = 4, seats = 8 }: { length?: number; seats
 
 export function Rug({ w, d, color }: { w: number; d: number; color: string }) {
   return (
-    <mesh rotation-x={-Math.PI / 2} position-y={0.012} receiveShadow>
+    <mesh rotation-x={-Math.PI / 2} position-y={0.06} receiveShadow>
       <planeGeometry args={[w, d]} />
       <meshStandardMaterial color={color} roughness={1} />
     </mesh>

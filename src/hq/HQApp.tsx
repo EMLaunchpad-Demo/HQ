@@ -1,13 +1,14 @@
 // Het virtuele hoofdkantoor (#/hq): het gebouw in 3D met daarover de interface.
 // Kijken en navigeren; chatten met de agents gebeurt in Claude, niet hier.
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowLeft, Building2, ChevronDown, ExternalLink, Mic, MicOff, PhoneCall, PhoneOff, Video, VideoOff } from 'lucide-react';
+import { ArrowLeft, Bell, Building2, ChevronDown, ExternalLink, Mic, MicOff, PhoneCall, PhoneOff, RefreshCw, Video, VideoOff } from 'lucide-react';
 import { config, fileUrl } from '../config';
 import { Logo } from '../components/Logo';
 import { HqScene } from './Scene';
-import { floors, humans, isBusy, isOpen, isOverdue, progress, startHqData, tasksByOwner, useHq, warRoomTasks, type FloorModel, type HqTaak, type Occupant } from './model';
+import { floors, humans, isBusy, isOpen, isOverdue, progress, startHqData, tasksByOwner, useHq, useTakenStand, warRoomTasks, type FloorModel, type HqTaak, type Occupant } from './model';
 import { ui, useUi } from './ui';
-import { accept, call, connectPresence, decline, hangup, nameOf, setMe, toggleCam, toggleMute, useCall } from './call';
+import { accept, call, decline, hangup, nameOf, setMe, startPresence, toggleCam, toggleMute, useCall, ZELF_KIEZEN } from './call';
+import { meldingenAanzetten, meldingenToestemming } from './bel';
 import { moodOf } from './world/Warehouse';
 import { MOOD_COLOR, type Mood } from './world/Character';
 
@@ -49,11 +50,11 @@ function Avatar({ o, size = 40 }: { o: Occupant; size?: number }) {
   );
 }
 
-function MoodChip({ mood }: { mood: Mood }) {
+function MoodChip({ mood, label }: { mood: Mood; label?: string }) {
   return (
     <span className="label inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider" style={{ background: 'rgba(255,255,255,0.06)', color: MOOD_COLOR[mood] }}>
       <span className="h-1.5 w-1.5 rounded-full" style={{ background: MOOD_COLOR[mood], boxShadow: `0 0 8px ${MOOD_COLOR[mood]}` }} />
-      {MOOD_LABEL[mood]}
+      {label ?? MOOD_LABEL[mood]}
     </span>
   );
 }
@@ -68,7 +69,7 @@ function Bar({ pct }: { pct: number }) {
 
 function TaskRow({ t }: { t: HqTaak }) {
   return (
-    <a href={t.url} target="_blank" rel="noreferrer" className="group flex items-start gap-2.5 rounded-lg px-2 py-1.5 hover:bg-white/5">
+    <a href={t.url || undefined} target="_blank" rel="noreferrer" className="group flex items-start gap-2.5 rounded-lg px-2 py-1.5 hover:bg-white/5">
       <span className="mt-1.5 h-2 w-2 shrink-0 rounded-full" style={{ background: STATUS_COLOR[t.status] ?? '#7c8a97' }} />
       <span className="min-w-0 flex-1">
         <span className={`block text-[13px] leading-snug ${isOpen(t) ? 'text-hi' : 'text-dim line-through'}`}>{t.naam}</span>
@@ -86,7 +87,9 @@ function TaskRow({ t }: { t: HqTaak }) {
 
 function PersonBlock({ o, tasks, roles, focus }: { o: Occupant; tasks: HqTaak[]; roles?: Occupant[]; focus: string | null }) {
   const live = useHq((s) => s.live[o.id]);
-  const mood = moodOf(tasks, live);
+  const stand = useTakenStand();
+  // Taken niet te geloven (Notion plat, verouderd): nooit "niets open", maar "taken onbekend".
+  const mood = moodOf(tasks, live, stand.ok);
   const p = progress(tasks);
   const [all, setAll] = useState(false);
   const shown = all ? tasks : tasks.filter(isOpen).slice(0, 6);
@@ -102,7 +105,7 @@ function PersonBlock({ o, tasks, roles, focus }: { o: Occupant; tasks: HqTaak[];
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
             <span className="truncate text-[15px] font-bold text-white">{o.name}</span>
-            <MoodChip mood={mood} />
+            <MoodChip mood={mood} label={mood === 'offline' ? 'Taken onbekend' : undefined} />
           </div>
           <div className="truncate text-[12px] text-mid">{o.title}</div>
         </div>
@@ -121,7 +124,11 @@ function PersonBlock({ o, tasks, roles, focus }: { o: Occupant; tasks: HqTaak[];
         <Bar pct={p.pct} />
       </div>
       <div className="mt-2 -mx-1">
-        {shown.length === 0 && <div className="px-2 py-1 text-[12px] text-dim">Geen open taken in Notion.</div>}
+        {shown.length === 0 && (
+          <div className="px-2 py-1 text-[12px]" style={{ color: stand.ok ? 'var(--dim)' : '#ff8a6a' }}>
+            {stand.ok ? 'Geen open taken in Notion.' : stand.tekst}
+          </div>
+        )}
         {shown.map((t) => (
           <TaskRow key={t.id} t={t} />
         ))}
@@ -163,7 +170,7 @@ function OfficeCard({ o, tasks }: { o: Occupant; tasks: HqTaak[] }) {
             className={btn}
             style={btnGrad}
             disabled={!me || !online || status !== 'idle'}
-            title={!me ? 'Meld je eerst aan' : !online ? `${o.name} is niet in het HQ` : ''}
+            title={!me ? (ZELF_KIEZEN ? 'Meld je eerst aan' : 'Even geduld: je login wordt nagekeken') : !online ? `${o.name} is niet in het HQ` : ''}
             onClick={() => {
               ui.go(level, `kantoor-${o.id}`);
               void call(o.id);
@@ -238,16 +245,40 @@ function Overview({ byOwner }: { byOwner: Record<string, HqTaak[]> }) {
   );
 }
 
-function LoungePanel() {
-  const zones: [string, string][] = [
-    ['Biljart en pingpong', 'Beneden in de arena: pooltafel onder een hanglamp, en een pingpongtafel.'],
-    ['Gaming room', 'Boven links: groot scherm, gamingstoelen, sofa en een arcadekast.'],
-    ['Salon en bar', 'Boven rechts: bank, lederen fauteuils, open haard en een bar.'],
-    ['Parking', 'Naast het HQ: vijf bedrijfswagens in de huisstijl van EM Launchpad, elk met een laadpaal.'],
-  ];
+const SPACES: Record<'lounge' | 'studio' | 'kitchen', { intro: string; zones: [string, string][] }> = {
+  lounge: {
+    intro: 'De plek om even te ontspannen, samen te komen of klanten te ontvangen, midden in het HQ.',
+    zones: [
+      ['EML Arena', 'Beneden: de pingpongtafel op een donkere sportvloer met neon in het merkverloop, een portaal met scorebord en een tribune.'],
+      ['Biljart', 'Naast de arena: pooltafel onder een hanglamp.'],
+      ['Gaming room', 'Boven links: groot scherm, gamingstoelen, sofa en een arcadekast.'],
+      ['Fitness', 'Boven rechts: loopbanden, fietsen, squatrek, halters en een spiegelwand.'],
+      ['Parking', 'Naast het HQ: vijf bedrijfswagens in de huisstijl van EM Launchpad, elk met een laadpaal.'],
+    ],
+  },
+  studio: {
+    intro: 'Waar de content gemaakt wordt: opnames, podcasts en montage, vooraan rechts in de hal.',
+    zones: [
+      ['Content studio', 'Witte cyclorama, softboxen, ringlamp en een camera met teleprompter.'],
+      ['Podcast', 'Akoestische panelen, ronde tafel met drie microfoons en een ON AIR-lamp boven de deur.'],
+      ['Montageplek', 'Twee schermen om de opnames meteen te monteren.'],
+    ],
+  },
+  kitchen: {
+    intro: 'De keuken en lounge links in de hal: samen eten, koffie, en even de tv aan.',
+    zones: [
+      ['Keuken', 'Lange keuken langs de muur, een groot eiland met krukken en een tv-wand.'],
+      ['Eettafel', 'Lange eiken tafel voor zes, tussen de keuken en de arena.'],
+      ['Lounge', 'Hoekbank, fauteuils en een mediawand met grote tv.'],
+    ],
+  },
+};
+
+function SpacePanel({ kind }: { kind: keyof typeof SPACES }) {
+  const { intro, zones } = SPACES[kind];
   return (
     <div className="space-y-3">
-      <p className="text-[13px] leading-relaxed text-mid">De plek om even te ontspannen, samen te komen of klanten te ontvangen, midden in het HQ.</p>
+      <p className="text-[13px] leading-relaxed text-mid">{intro}</p>
       {zones.map(([t, d], i) => (
         <div key={t} className="rounded-2xl p-3" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid var(--line)' }}>
           <div className="font-mono text-[10px] uppercase tracking-wider text-cyan">{String(i + 1).padStart(2, '0')}</div>
@@ -297,26 +328,59 @@ function Elevator({ byOwner }: { byOwner: Record<string, HqTaak[]> }) {
 
 function SourceChip() {
   const bron = useHq((s) => s.bron);
-  const bijgewerkt = useHq((s) => s.bijgewerkt);
-  const tijd = bijgewerkt ? new Date(bijgewerkt).toLocaleString('nl-BE', { day: 'numeric', month: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
-  const [c, t] =
-    bron === 'notion' ? ['#2ff0a6', `Live uit Notion · ${tijd}`] : bron === 'momentopname' ? ['#ffd23f', `Notion-momentopname · ${tijd}`] : bron === 'laden' ? ['#7c8a97', 'Taken laden…'] : ['#ff8a6a', 'Geen taken gevonden'];
+  const fout = useHq((s) => s.fout);
+  const stand = useTakenStand();
+  const c = stand.ok ? (bron === 'notion' ? '#2ff0a6' : '#ffd23f') : bron === 'laden' ? '#7c8a97' : '#ff8a6a';
   return (
-    <span className="inline-flex items-center gap-2 font-mono text-[10px] uppercase tracking-wider text-mid">
-      <span className="h-1.5 w-1.5 rounded-full" style={{ background: c, boxShadow: `0 0 8px ${c}` }} />
-      {t}
+    <span className="block">
+      <span className="inline-flex items-center gap-2 font-mono text-[10px] uppercase tracking-wider text-mid">
+        <span className="h-1.5 w-1.5 rounded-full" style={{ background: c, boxShadow: `0 0 8px ${c}` }} />
+        {stand.tekst}
+      </span>
+      {/* Waarom het niet klopt, zichtbaar en niet enkel als tooltip. */}
+      {!stand.ok && fout && (
+        <span className="block max-w-[260px] truncate text-[11px] text-dim" title={fout}>
+          {fout}
+        </span>
+      )}
     </span>
+  );
+}
+
+/** Meldingen van het systeem voor een inkomende call: toestemming enkel na een klik. */
+function MeldingenKnop() {
+  const me = useCall((s) => s.me);
+  const [toestemming, setToestemming] = useState(meldingenToestemming);
+  if (!me || toestemming !== 'default') return null;
+  return (
+    <button
+      className="flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[12px] text-mid hover:text-white"
+      style={glass}
+      title="Zo zie je een inkomende videocall ook als het HQ in een ander tabblad staat."
+      onClick={() => void meldingenAanzetten().then(setToestemming)}
+    >
+      <Bell size={13} /> Meldingen aanzetten
+    </button>
   );
 }
 
 function WhoAmI() {
   const me = useCall((s) => s.me);
   const [open, setOpen] = useState(false);
-  if (!me) return null;
+  // Online komt wie je bent uit de login: niets te kiezen.
+  if (!ZELF_KIEZEN) {
+    if (!me) return null;
+    return (
+      <span className="flex items-center gap-2 rounded-full px-3 py-1.5 text-[12px] text-hi" style={glass}>
+        <span className="h-1.5 w-1.5 rounded-full bg-mint" /> Je bent {nameOf(me)}
+      </span>
+    );
+  }
+  // Lokaal: wisselen, of alsnog aanmelden na "Enkel rondkijken".
   return (
     <div className="relative">
       <button className="flex items-center gap-2 rounded-full px-3 py-1.5 text-[12px] text-hi" style={glass} onClick={() => setOpen((x) => !x)}>
-        <span className="h-1.5 w-1.5 rounded-full bg-mint" /> Je bent {nameOf(me)} <ChevronDown size={13} />
+        <span className={`h-1.5 w-1.5 rounded-full ${me ? 'bg-mint' : 'bg-dim'}`} /> {me ? `Je bent ${nameOf(me)}` : 'Aanmelden'} <ChevronDown size={13} />
       </button>
       {open && (
         <div className="absolute right-0 mt-2 w-44 rounded-xl p-1" style={glass}>
@@ -331,10 +395,25 @@ function WhoAmI() {
   );
 }
 
+/** De login (Cloudflare Access) is verlopen: één duidelijke balk, en niets probeert nog op de achtergrond. */
+function VerlopenBalk() {
+  const verlopen = useHq((s) => s.verlopen);
+  if (!verlopen) return null;
+  return (
+    <div className="pointer-events-auto fixed left-1/2 top-4 z-[60] flex -translate-x-1/2 items-center gap-3 rounded-2xl px-4 py-2.5" style={{ ...glass, border: '1px solid rgba(255,138,106,.55)' }} role="alert">
+      <span className="text-[13px] text-hi">Je login is verlopen. Herlaad de pagina om opnieuw in te loggen.</span>
+      <button className={btn} style={btnGrad} onClick={() => location.reload()}>
+        <RefreshCw size={14} /> Herladen
+      </button>
+    </div>
+  );
+}
+
 function Welcome() {
   const me = useCall((s) => s.me);
   const [skip, setSkip] = useState(false);
-  if (me || skip) return null;
+  // Enkel lokaal: online weet het HQ wie je bent uit de login.
+  if (!ZELF_KIEZEN || me || skip) return null;
   return (
     <div className="pointer-events-auto fixed inset-0 z-40 flex items-center justify-center" style={{ background: 'rgba(6,8,12,0.45)' }}>
       <div className="w-[380px] rounded-3xl p-6" style={glass}>
@@ -351,7 +430,7 @@ function Welcome() {
           ))}
         </div>
         <button className="mt-3 w-full text-center text-[12px] text-dim hover:text-hi" onClick={() => setSkip(true)}>
-          Enkel rondkijken
+          Enkel rondkijken (aanmelden kan later rechtsboven)
         </button>
       </div>
     </div>
@@ -448,7 +527,7 @@ function useKeys() {
 export default function HQApp() {
   useEffect(() => {
     startHqData();
-    connectPresence();
+    void startPresence();
     const prev = document.title;
     document.title = 'EM Launchpad HQ';
     return () => {
@@ -493,6 +572,7 @@ export default function HQApp() {
         </div>
 
         <div className="pointer-events-auto absolute right-4 top-4 flex items-center gap-2">
+          <MeldingenKnop />
           <WhoAmI />
           {/* In de losse versie (repo HQ, online) is er geen organigram om naar terug te gaan. */}
           {!import.meta.env.VITE_HQ_LOS && (
@@ -514,7 +594,7 @@ export default function HQApp() {
             </div>
             <h1 className="mt-1 text-[22px] font-extrabold leading-tight text-white">{floor ? floor.label : 'Het hoofdkantoor'}</h1>
           </div>
-          <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4">{floor?.lounge ? <LoungePanel /> : floor ? <FloorPanel floor={floor} byOwner={byOwner} /> : <Overview byOwner={byOwner} />}</div>
+          <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4">{floor?.lounge ? <SpacePanel kind="lounge" /> : floor?.studio ? <SpacePanel kind="studio" /> : floor?.kitchen ? <SpacePanel kind="kitchen" /> : floor ? <FloorPanel floor={floor} byOwner={byOwner} /> : <Overview byOwner={byOwner} />}</div>
         </div>
 
         <div className="absolute bottom-4 left-1/2 -translate-x-1/2 rounded-full px-4 py-1.5 font-mono text-[10px] uppercase tracking-wider text-mid" style={glass}>
@@ -524,6 +604,7 @@ export default function HQApp() {
 
       <Welcome />
       <CallUi />
+      <VerlopenBalk />
     </div>
   );
 }

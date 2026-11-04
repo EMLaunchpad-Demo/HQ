@@ -212,6 +212,102 @@ export const leafTex = (rep: [number, number], kind: keyof typeof LEAF = 'groen'
     }
   }, rep);
 
+/** Zachte gloed achter neon: wit in het midden, doorzichtig naar de randen (wordt ingekleurd). */
+export const glowTex = () =>
+  make('gloed', 256, (g, _r, s) => {
+    g.clearRect(0, 0, s, s);
+    const grd = g.createRadialGradient(s / 2, s / 2, 0, s / 2, s / 2, s / 2);
+    grd.addColorStop(0, 'rgba(255,255,255,0.9)');
+    grd.addColorStop(0.35, 'rgba(255,255,255,0.35)');
+    grd.addColorStop(1, 'rgba(255,255,255,0)');
+    g.fillStyle = grd;
+    g.fillRect(0, 0, s, s);
+  });
+
+/** Witte tegels met donkere voeg (spatwand in de keuken). */
+export const tileTex = (rep: [number, number]) =>
+  make('tegels', 256, (g, r, s) => {
+    g.fillStyle = '#8c8f93';
+    g.fillRect(0, 0, s, s);
+    const n = 8;
+    const t = s / n;
+    for (let y = 0; y < n; y++)
+      for (let x = 0; x < n * 2; x++) {
+        const off = y % 2 ? t / 2 : 0;
+        g.fillStyle = ['#f3f3f1', '#eeeeec', '#f6f6f4'][Math.floor(r() * 3)];
+        g.fillRect(x * (t / 2) * 2 - off + 1, y * t + 1, t - 2, t - 2);
+      }
+  }, rep);
+
+/** Zwarte golfplaat (gevelbekleding van een warehouse): verticale ribben met licht en schaduw. */
+export const corrugatedTex = (rep: [number, number]) =>
+  make('golfplaat', 512, (g, _r, s) => {
+    const ribs = 16;
+    const rw = s / ribs;
+    for (let i = 0; i < ribs; i++) {
+      const grad = g.createLinearGradient(i * rw, 0, (i + 1) * rw, 0);
+      grad.addColorStop(0, '#1c1f23');
+      grad.addColorStop(0.35, '#3a3f45');
+      grad.addColorStop(0.5, '#4a5057');
+      grad.addColorStop(0.65, '#33383e');
+      grad.addColorStop(1, '#1a1d21');
+      g.fillStyle = grad;
+      g.fillRect(i * rw, 0, rw, s);
+    }
+    g.fillStyle = 'rgba(0,0,0,0.25)';
+    g.fillRect(0, s - 3, s, 3);
+  }, rep);
+
+/** Houten gevelbekleding (ceder), verticale planken. */
+export const cedarTex = (rep: [number, number]) =>
+  make('ceder', 512, (g, r, s) => {
+    const tones = ['#a8704a', '#b77c52', '#9c6644', '#c08658', '#a36b47'];
+    const n = 12;
+    const pw = s / n;
+    for (let i = 0; i < n; i++) {
+      g.fillStyle = tones[Math.floor(r() * tones.length)];
+      g.fillRect(i * pw, 0, pw, s);
+      for (let k = 0; k < 10; k++) {
+        g.strokeStyle = `rgba(70,40,20,${0.08 + r() * 0.1})`;
+        g.lineWidth = 0.8;
+        g.beginPath();
+        const x = i * pw + r() * pw;
+        g.moveTo(x, 0);
+        g.lineTo(x + (r() - 0.5) * 6, s);
+        g.stroke();
+      }
+      g.fillStyle = 'rgba(30,15,5,0.5)';
+      g.fillRect(i * pw + pw - 3, 0, 3, s);
+    }
+  }, rep);
+
+/** Betonnen wandpanelen met naden en bekistingsgaatjes (binnenkant van het warehouse). */
+export const concretePanelTex = (rep: [number, number]) =>
+  make('betonpaneel', 512, (g, r, s) => {
+    g.fillStyle = '#b9b6b0';
+    g.fillRect(0, 0, s, s);
+    speckle(g, r, s, 6000, ['#b1aea8', '#c2bfb9', '#aaa7a1', '#bdbab4'], 1, 3);
+    for (let i = 0; i < 18; i++) {
+      const x = r() * s;
+      const y = r() * s;
+      const rad = 30 + r() * 80;
+      const grd = g.createRadialGradient(x, y, 0, x, y, rad);
+      grd.addColorStop(0, r() > 0.5 ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)');
+      grd.addColorStop(1, 'rgba(0,0,0,0)');
+      g.fillStyle = grd;
+      g.fillRect(x - rad, y - rad, rad * 2, rad * 2);
+    }
+    g.fillStyle = 'rgba(60,58,55,0.55)';
+    g.fillRect(0, 0, s, 3);
+    g.fillRect(0, 0, 3, s);
+    g.fillStyle = 'rgba(70,68,65,0.6)';
+    for (const [x, y] of [[0.25, 0.25], [0.75, 0.25], [0.25, 0.75], [0.75, 0.75]] as [number, number][]) {
+      g.beginPath();
+      g.arc(x * s, y * s, 4, 0, Math.PI * 2);
+      g.fill();
+    }
+  }, rep);
+
 /** Notenhouten lambrisering: verticale latten met nerf, warm en donker (mid-century). */
 export const walnutTex = (rep: [number, number]) =>
   make('noten', 512, (g, r, s) => {

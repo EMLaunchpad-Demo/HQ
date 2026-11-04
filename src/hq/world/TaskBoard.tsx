@@ -5,7 +5,7 @@ import { Text } from '@react-three/drei';
 import { FONT, FONT_MONO, FONT_REGULAR } from '../fonts';
 import { brandGradientTex, screenTex } from '../textures';
 import { useUi } from '../ui';
-import { isBusy, isOpen, isOverdue, progress, type HqTaak } from '../model';
+import { isBusy, isOpen, isOverdue, progress, useTakenStand, type HqTaak } from '../model';
 
 const STATUS_COLOR: Record<string, string> = {
   'In uitvoering': '#2ff0a6',
@@ -27,6 +27,8 @@ export function TaskBoard({ title, subtitle, tasks, w = 3.6, h = 2.1 }: { title:
   // Van buiten (door het glas) is de tekst onleesbaar: dan enkel een oplichtend scherm, veel minder tekenwerk.
   const level = useUi((s) => s.level);
   const far = level < 0;
+  // Notion plat of de lijst verouderd: de laatst goede taken blijven staan, maar nooit "alles is bij".
+  const stand = useTakenStand();
 
   if (far)
     return (
@@ -64,6 +66,11 @@ export function TaskBoard({ title, subtitle, tasks, w = 3.6, h = 2.1 }: { title:
       <Text font={FONT_MONO} fontSize={0.075} color="#aab8c2" anchorX="right" anchorY="top" position={[w / 2 - pad, h / 2 - 0.12, 0.01]}>
         {`${p.busy} BEZIG · ${p.open} OPEN · ${p.done} KLAAR${overdue ? ` · ${overdue} TE LAAT` : ''}`}
       </Text>
+      {!stand.ok && top.length > 0 && (
+        <Text font={FONT_MONO} fontSize={0.065} color="#ff8a6a" anchorX="right" anchorY="top" position={[w / 2 - pad, h / 2 - 0.25, 0.01]}>
+          {stand.tekst.toUpperCase()}
+        </Text>
+      )}
       {/* Voortgang */}
       <mesh position={[0, h / 2 - 0.55, 0.004]}>
         <planeGeometry args={[w - pad * 2, 0.035]} />
@@ -76,8 +83,8 @@ export function TaskBoard({ title, subtitle, tasks, w = 3.6, h = 2.1 }: { title:
         </mesh>
       )}
       {top.length === 0 && (
-        <Text font={FONT_REGULAR} fontSize={0.1} color="#7c8a97" anchorX="left" anchorY="top" position={[left, h / 2 - 0.7, 0.01]}>
-          Geen open taken. Alles is bij.
+        <Text font={FONT_REGULAR} fontSize={0.1} color={stand.ok ? '#7c8a97' : '#ff8a6a'} anchorX="left" anchorY="top" position={[left, h / 2 - 0.7, 0.01]}>
+          {stand.ok ? 'Geen open taken. Alles is bij.' : stand.tekst.endsWith('…') ? stand.tekst : `${stand.tekst}.`}
         </Text>
       )}
       {top.map((t, i) => {

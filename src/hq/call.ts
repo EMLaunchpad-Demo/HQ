@@ -1,8 +1,10 @@
 // Videocall tussen de founders in het HQ: WebRTC rechtstreeks van pc naar pc (gratis).
-// De dev-server (server/hq.ts) geeft alleen de berichtjes door om de verbinding op te zetten.
-// Wie je bent onthoudt de browser (localStorage), of komt uit ?ik=<id> in de link.
+// Lokaal geeft de dev-server (server/hq.ts) de berichtjes door, online het Durable Object "Kantoor" (hq-cloud/).
+// Wie je bent: online uit de login (GET /hq/ik, Cloudflare Access), lokaal kies je het zelf
+// (onthouden in localStorage, of ?ik=<id> in de link).
 import { useSyncExternalStore } from 'react';
-import { hqStore, humans } from './model';
+import { hqStore, humans, loginVerlopen, meldVerlopen } from './model';
+import { startBel, stopBel } from './bel';
 
 export type CallStatus = 'idle' | 'uitgaand' | 'inkomend' | 'verbinden' | 'verbonden';
 
@@ -20,8 +22,23 @@ interface CallState {
   zonderCamera: boolean;
 }
 
+/**
+ * Twee manieren om de berichtjes door te geven:
+ * - lokaal (npm run dev): live-stroom + POST via de dev-server (server/hq.ts);
+ * - online (gebouwde app op Cloudflare, zie hq-cloud/): één WebSocket naar het "kantoor".
+ */
+const ONLINE = import.meta.env.PROD;
+/** Lokaal kies je zelf wie je bent (naamkiezer); online komt dat enkel uit de login. */
+export const ZELF_KIEZEN = !ONLINE;
+
 const KEY = 'hq-ik';
-const fromUrl = new URLSearchParams(location.search).get('ik');
+const ID_RE = /^[a-z0-9-]{1,40}$/;
+const urlIk = new URLSearchParams(location.search).get('ik');
+/**
+ * Om de online versie lokaal te testen (wrangler dev zonder login) gaat ?ik= uit de link mee naar de Worker.
+ * Online negeert de Worker het: daar telt enkel de login.
+ */
+const IK_QUERY = urlIk && ID_RE.test(urlIk) ? `?ik=${urlIk}` : '';
 const stored = (() => {
   try {
     return localStorage.getItem(KEY);
@@ -29,12 +46,16 @@ const stored = (() => {
     return null;
   }
 })();
-const initialMe = [fromUrl, stored].find((x) => x && humans.some((h) => h.id === x)) ?? null;
+const initialMe = ONLINE ? null : ([urlIk, stored].find((x) => x && humans.some((h) => h.id === x)) ?? null);
 
 let state: CallState = { me: initialMe, status: 'idle', peer: null, local: null, remote: null, muted: false, camOff: false, melding: null, zonderCamera: false };
 const subs = new Set<() => void>();
 const set = (p: Partial<CallState>) => {
+  const vorig = state.status;
   state = { ...state, ...p };
+  // Bellen zolang er een oproep binnenkomt, op één plek: zo stopt het ook bij elke manier van eindigen.
+  if (state.status === 'inkomend' && vorig !== 'inkomend') startBel(nameOf(state.peer));
+  else if (state.status !== 'inkomend' && vorig === 'inkomend') stopBel();
   subs.forEach((f) => f());
 };
 export const callStore = { get: () => state, subscribe: (f: () => void) => (subs.add(f), () => subs.delete(f)) };
@@ -44,44 +65,134 @@ export function useCall<T>(sel: (s: CallState) => T): T {
 
 const nameOf = (id: string | null) => humans.find((h) => h.id === id)?.name ?? id ?? '';
 
-let es: EventSource | null = null;
-let pc: RTCPeerConnection | null = null;
-let pendingIce: RTCIceCandidateInit[] = [];
-let ringTimer: ReturnType<typeof setTimeout> | undefined;
 let noteTimer: ReturnType<typeof setTimeout> | undefined;
-let fakeTimer: ReturnType<typeof setInterval> | undefined;
-
-function note(melding: string | null) {
+function note(melding: string | null, ms = 6000) {
   clearTimeout(noteTimer);
   set({ melding });
-  if (melding) noteTimer = setTimeout(() => set({ melding: null }), 6000);
+  if (melding) noteTimer = setTimeout(() => set({ melding: null }), ms);
 }
 
-/**
- * Twee manieren om de berichtjes door te geven:
- * - lokaal (npm run dev): live-stroom + POST via de dev-server (server/hq.ts);
- * - online (gebouwde app op Cloudflare, zie hq-cloud/): één WebSocket naar het "kantoor".
- */
-const ONLINE = import.meta.env.PROD;
+// --- Berichten (signalering) ---
+
+const SOORTEN = ['bellen', 'aanvaard', 'aanbod', 'antwoord', 'ice', 'geweigerd', 'bezet', 'ophangen', 'elders'] as const;
+type Soort = (typeof SOORTEN)[number];
+
+interface Bericht {
+  van: string;
+  /** Het tabblad (sessie) dat het stuurde, gezet door het kantoor (online) of de dev-server (lokaal). */
+  vanSid: string | null;
+  soort: Soort;
+  data: unknown;
+}
+
+const isObj = (x: unknown): x is Record<string, unknown> => !!x && typeof x === 'object' && !Array.isArray(x);
+const isId = (x: unknown): x is string => typeof x === 'string' && humans.some((h) => h.id === x);
+
+function leesJson(raw: unknown): unknown {
+  if (typeof raw !== 'string' || raw.length > 256_000) return null;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+/** Enkel gekende soorten van een gekende collega; de rest negeren we. */
+function leesBericht(x: unknown): Bericht | null {
+  if (!isObj(x) || typeof x.soort !== 'string') return null;
+  const soort = SOORTEN.find((s) => s === x.soort);
+  if (!soort) return null;
+  const van = typeof x.van === 'string' ? x.van : '';
+  // "elders" komt van het kantoor zelf (een ander tabblad nam op), soms zonder afzender.
+  if (soort !== 'elders' && !isId(van)) return null;
+  const vanSid = typeof x.vanSid === 'string' && x.vanSid.length <= 64 ? x.vanSid : null;
+  return { van, vanSid, soort, data: x.data ?? null };
+}
+
+const MAX_SDP = 60_000;
+/** Een aanbod of antwoord zoals de browser het maakt; anders niet naar setRemoteDescription. */
+function alsSdp(x: unknown, type: 'offer' | 'answer'): RTCSessionDescriptionInit | null {
+  if (!isObj(x) || x.type !== type || typeof x.sdp !== 'string') return null;
+  if (x.sdp.length > MAX_SDP || !x.sdp.startsWith('v=0')) return null;
+  return { type, sdp: x.sdp };
+}
+
+/** Een ICE-kandidaat zoals RTCIceCandidate.toJSON() hem geeft; anders niet naar addIceCandidate. */
+function alsIce(x: unknown): RTCIceCandidateInit | null {
+  if (!isObj(x) || typeof x.candidate !== 'string' || x.candidate.length > 2000) return null;
+  const mid = x.sdpMid ?? null;
+  const index = x.sdpMLineIndex ?? null;
+  const frag = x.usernameFragment ?? null;
+  if (mid !== null && (typeof mid !== 'string' || mid.length > 64)) return null;
+  if (index !== null && (typeof index !== 'number' || !Number.isInteger(index) || index < 0 || index > 63)) return null;
+  if (frag !== null && (typeof frag !== 'string' || frag.length > 256)) return null;
+  if (mid === null && index === null) return null;
+  return { candidate: x.candidate, sdpMid: mid, sdpMLineIndex: index, usernameFragment: frag };
+}
+
+let es: EventSource | null = null;
+/** Lokaal: het sessie-id van dit tabblad (event "welkom" van de dev-server), zodat een POST van het juiste tabblad komt. */
+let mijnSid: string | null = null;
 let ws: WebSocket | null = null;
 let wsRetry: ReturnType<typeof setTimeout> | undefined;
+let wsPing: ReturnType<typeof setInterval> | undefined;
+/** Mislukte pogingen na elkaar, voor de wachttijd (1 s → 30 s). */
+let pogingen = 0;
+let wachtOpnieuw = false;
+/** Laatste teken van leven van het kantoor (elk bericht, ook "pong"). */
+let laatstGehoord = 0;
 
-async function post(naar: string, soort: string, data: unknown = null) {
+let pc: RTCPeerConnection | null = null;
+let pendingIce: RTCIceCandidateInit[] = [];
+/** Online: het tabblad van de ander in dit gesprek. Andere tabbladen van die persoon mogen het gesprek niet storen. */
+let peerSid: string | null = null;
+/**
+ * Telt op bij elk nieuw gesprek en bij elk ophangen. Komt een camera of een antwoord binnen voor een gesprek
+ * dat intussen voorbij is, dan herkennen we het daaraan (en zetten we de camera meteen weer uit).
+ */
+let gesprek = 0;
+let ice: Promise<RTCIceServer[]> | null = null;
+let ringTimer: ReturnType<typeof setTimeout> | undefined;
+let verbindTimer: ReturnType<typeof setTimeout> | undefined;
+let iceTimer: ReturnType<typeof setTimeout> | undefined;
+
+async function post(naar: string, soort: Soort, data: unknown = null, naarSid: string | null = peerSid) {
   if (ONLINE) {
     if (ws?.readyState !== WebSocket.OPEN) return false;
     if (soort === 'bellen' && !hqStore.get().online.includes(naar)) return false;
-    ws.send(JSON.stringify({ naar, soort, data }));
-    return true;
+    try {
+      ws.send(JSON.stringify({ naar, soort, data, ...(naarSid ? { naarSid } : {}) }));
+      return true;
+    } catch {
+      return false;
+    }
   }
   const r = await fetch('/hq/signaal', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ van: state.me, naar, soort, data }),
+    body: JSON.stringify({ van: state.me, naar, soort, data, ...(mijnSid ? { vanSid: mijnSid } : {}), ...(naarSid ? { naarSid } : {}) }),
   }).catch(() => null);
   return !!r?.ok;
 }
 
+// --- Wie ben je, en aanwezig zijn ---
+
+/** Online: wie ben je volgens de login? 'verlopen' = niet (meer) ingelogd, 'fout' = even geen verbinding. */
+async function vraagIk(): Promise<string | 'verlopen' | 'fout'> {
+  try {
+    const r = await fetch(`/hq/ik${IK_QUERY}`, { redirect: 'manual', cache: 'no-store', headers: { Accept: 'application/json' } });
+    if (loginVerlopen(r)) return 'verlopen';
+    if (!r.ok) return 'fout';
+    const d: unknown = await r.json();
+    return isObj(d) && typeof d.wie === 'string' && ID_RE.test(d.wie) ? d.wie : 'fout';
+  } catch {
+    return 'fout';
+  }
+}
+
+/** Lokaal: zelf kiezen wie je bent. Online kan dat niet, daar telt de login. */
 export function setMe(id: string) {
+  if (!ZELF_KIEZEN) return;
   try {
     localStorage.setItem(KEY, id);
   } catch {
@@ -92,39 +203,169 @@ export function setMe(id: string) {
   connectPresence();
 }
 
-/** Aanmelden in het HQ: zo zien de anderen dat je er bent, en kan je gebeld worden. */
-export function connectPresence() {
+/** Aanmelden in het HQ bij het openen: online eerst vragen wie je bent, daarna verbinden. */
+export async function startPresence() {
+  if (!ONLINE || state.me) return connectPresence();
+  if (hqStore.get().verlopen) return;
+  const ik = await vraagIk();
+  if (ik === 'verlopen') return meldVerlopen();
+  if (ik === 'fout') return planOpnieuw();
+  pogingen = 0;
+  set({ me: ik });
+  connectPresence();
+}
+
+/** Opnieuw proberen met een oplopende wachttijd (1 s → 30 s, met wat willekeur), nooit na een verlopen login. */
+function planOpnieuw() {
+  clearTimeout(wsRetry);
+  if (hqStore.get().verlopen) return;
+  const basis = Math.min(30_000, 1000 * 2 ** Math.min(pogingen, 5));
+  pogingen++;
+  wachtOpnieuw = true;
+  wsRetry = setTimeout(opnieuwNu, basis * (0.75 + Math.random() * 0.5));
+}
+
+function opnieuwNu() {
+  clearTimeout(wsRetry);
+  wachtOpnieuw = false;
+  if (state.me) connectPresence();
+  else void startPresence();
+}
+
+function sluitVerbinding() {
   es?.close();
   es = null;
+  mijnSid = null;
   clearTimeout(wsRetry);
+  clearInterval(wsPing);
+  wachtOpnieuw = false;
   if (ws) {
-    ws.onclose = null;
-    ws.close();
+    const oud = ws;
     ws = null;
+    oud.onopen = null;
+    oud.onmessage = null;
+    oud.onclose = null;
+    try {
+      oud.close();
+    } catch {
+      /* al dicht */
+    }
   }
-  if (!state.me) return;
-  if (ONLINE) {
-    const sock = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/hq/signaal?wie=${encodeURIComponent(state.me)}`);
-    ws = sock;
-    sock.onmessage = (m) => {
-      const { event, data } = JSON.parse(m.data);
-      if (event === 'aanwezig') hqStore.set({ online: data });
-      else if (event === 'bericht') void onMessage(data);
-      else if (event === 'niet-online' && data?.naar === state.peer && state.status === 'uitgaand') {
-        cleanup();
-        note(`${nameOf(data.naar)} is nu niet in het HQ.`);
-      }
-    };
-    // Verbinding weg (wifi, slaapstand): stil opnieuw proberen.
-    sock.onclose = () => {
-      if (ws === sock) wsRetry = setTimeout(connectPresence, 3000);
-    };
-    return;
-  }
+}
+
+function connectPresence() {
+  sluitVerbinding();
+  if (!state.me || hqStore.get().verlopen) return;
+  if (ONLINE) return openSocket();
   const source = new EventSource(`/hq/signaal?wie=${encodeURIComponent(state.me)}`);
   es = source;
-  source.addEventListener('aanwezig', (m) => hqStore.set({ online: JSON.parse((m as MessageEvent).data) }));
-  source.addEventListener('bericht', (m) => void onMessage(JSON.parse((m as MessageEvent).data)));
+  source.addEventListener('welkom', (m) => {
+    const w = leesJson((m as MessageEvent).data);
+    if (es === source && isObj(w) && typeof w.sid === 'string' && /^[A-Za-z0-9-]{8,64}$/.test(w.sid)) mijnSid = w.sid;
+  });
+  source.addEventListener('aanwezig', (m) => zetAanwezig(leesJson((m as MessageEvent).data)));
+  source.addEventListener('bericht', (m) => {
+    const b = leesBericht(leesJson((m as MessageEvent).data));
+    if (b) void onMessage(b);
+  });
+}
+
+function openSocket() {
+  const sock = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/hq/signaal${IK_QUERY}`);
+  ws = sock;
+  let geopend = 0;
+  /** Verbinding opgeven en opnieuw beginnen (zonder op de browser te wachten). */
+  const opgeven = () => {
+    if (ws !== sock) return;
+    if (geopend && Date.now() - geopend > 10_000) pogingen = 0;
+    sluitVerbinding();
+    planOpnieuw();
+  };
+  sock.onopen = () => {
+    geopend = laatstGehoord = Date.now();
+    clearInterval(wsPing);
+    // Hartslag: het kantoor antwoordt "pong" zonder wakker te worden. Zo blijft de verbinding open, en
+    // merken we een half-open verbinding (na slaapstand of wifi-wissel) op.
+    wsPing = setInterval(() => {
+      if (ws !== sock || sock.readyState !== WebSocket.OPEN) return;
+      if (Date.now() - laatstGehoord > 90_000) return opgeven();
+      try {
+        sock.send('ping');
+      } catch {
+        opgeven();
+      }
+    }, 25_000);
+  };
+  sock.onmessage = (m) => {
+    laatstGehoord = Date.now();
+    if (m.data === 'pong') return;
+    onSocketBericht(leesJson(m.data));
+  };
+  sock.onclose = (e) => {
+    if (ws !== sock) return;
+    clearInterval(wsPing);
+    ws = null;
+    // 4000: het kantoor sloot dit tabblad, omdat het HQ in te veel tabbladen open staat. Niet opnieuw verbinden.
+    if (e.code === 4000) return note('Het HQ staat in te veel tabbladen open. Dit tabblad is losgekoppeld: herlaad het om opnieuw te verbinden.', 20_000);
+    if (geopend && Date.now() - geopend > 10_000) pogingen = 0;
+    // Lukt het verbinden herhaald niet, kijk dan of de login verlopen is (een WebSocket toont de 401 zelf niet).
+    if (!geopend && pogingen >= 1) {
+      void vraagIk().then((ik) => (ik === 'verlopen' ? meldVerlopen() : planOpnieuw()));
+      return;
+    }
+    planOpnieuw();
+  };
+}
+
+/** Terug in het tabblad of weer internet: niet wachten, meteen opnieuw verbinden. */
+function wakker() {
+  if (document.hidden || !wachtOpnieuw || hqStore.get().verlopen) return;
+  pogingen = 0;
+  opnieuwNu();
+}
+window.addEventListener('online', wakker);
+document.addEventListener('visibilitychange', wakker);
+
+function onSocketBericht(x: unknown) {
+  if (!isObj(x)) return;
+  if (x.event === 'aanwezig') return zetAanwezig(x.data);
+  if (x.event === 'niet-online') {
+    const naar = isObj(x.data) && typeof x.data.naar === 'string' ? x.data.naar : null;
+    if (!naar || naar !== state.peer) return;
+    if (state.status === 'uitgaand' || state.status === 'verbinden') {
+      cleanup();
+      note(`${nameOf(naar)} is nu niet in het HQ.`);
+    }
+    return;
+  }
+  // Gewoon een bericht van een collega, of iets rechtstreeks van het kantoor (bv. {"soort":"elders"}).
+  const b = leesBericht(x.event === 'bericht' ? x.data : x);
+  if (b) void onMessage(b);
+}
+
+function zetAanwezig(x: unknown) {
+  if (!Array.isArray(x)) return;
+  const online = x.filter(isId);
+  if (online.join() !== hqStore.get().online.join()) hqStore.set({ online });
+  // Is de ander weg terwijl het belt of verbindt (tabblad dicht), dan niet blijven hangen.
+  if (state.peer && !online.includes(state.peer) && (state.status === 'inkomend' || state.status === 'uitgaand' || state.status === 'verbinden')) {
+    const wie = nameOf(state.peer);
+    cleanup();
+    note(`${wie} is nu niet in het HQ.`);
+  }
+}
+
+// --- Camera en microfoon ---
+
+/** Timers van de naamkaartjes, per stream (zodat een laat kaartje nooit de timer van een nieuw gesprek stopt). */
+const kaartTimers = new WeakMap<MediaStream, ReturnType<typeof setInterval>>();
+
+/** Camera en microfoon echt uit (het lampje gaat uit). */
+function stopMedia(s: MediaStream | null) {
+  if (!s) return;
+  s.getTracks().forEach((t) => t.stop());
+  clearInterval(kaartTimers.get(s));
+  kaartTimers.delete(s);
 }
 
 /** Naamkaartje als videobeeld, als er geen camera is (of geen toestemming). */
@@ -162,34 +403,47 @@ function nameCardStream(): MediaStream {
     g.fillText('CAMERA UIT', 320, 316);
   };
   draw();
-  fakeTimer = setInterval(draw, 100);
-  return c.captureStream(10);
+  const s = c.captureStream(10);
+  kaartTimers.set(s, setInterval(draw, 100));
+  return s;
 }
 
-/** Een toestemmingsvraag die niemand beantwoordt, mag de call niet blokkeren. */
-function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+/** Een toestemmingsvraag die niemand beantwoordt, mag de call niet blokkeren. Komt de camera daarna toch, dan meteen weer uit. */
+function mediaMetTimeout(p: Promise<MediaStream>, ms: number): Promise<MediaStream> {
   return new Promise((resolve, reject) => {
-    const t = setTimeout(() => reject(new Error('timeout')), ms);
+    let klaar = false;
+    const t = setTimeout(() => {
+      klaar = true;
+      reject(new Error('timeout'));
+    }, ms);
     p.then(
-      (v) => (clearTimeout(t), resolve(v)),
-      (e) => (clearTimeout(t), reject(e)),
+      (s) => {
+        if (klaar) return stopMedia(s);
+        klaar = true;
+        clearTimeout(t);
+        resolve(s);
+      },
+      (e) => {
+        if (klaar) return;
+        klaar = true;
+        clearTimeout(t);
+        reject(e);
+      },
     );
   });
 }
 
+/** Camera en microfoon, of het naamkaartje (met microfoon als dat wel lukt). Faalt nooit. */
 async function getMedia(): Promise<MediaStream> {
   try {
-    const s = await withTimeout(
+    return await mediaMetTimeout(
       navigator.mediaDevices.getUserMedia({ video: { width: 1280, height: 720 }, audio: { echoCancellation: true, noiseSuppression: true } }),
       20_000,
     );
-    set({ zonderCamera: false });
-    return s;
   } catch {
     const card = nameCardStream();
-    set({ zonderCamera: true });
     try {
-      const mic = await withTimeout(navigator.mediaDevices.getUserMedia({ audio: true }), 5_000);
+      const mic = await mediaMetTimeout(navigator.mediaDevices.getUserMedia({ audio: true }), 5_000);
       mic.getAudioTracks().forEach((t) => card.addTrack(t));
     } catch {
       /* ook geen microfoon: dan enkel beeld */
@@ -198,72 +452,174 @@ async function getMedia(): Promise<MediaStream> {
   }
 }
 
-function makePeer(peer: string, local: MediaStream) {
-  const conn = new RTCPeerConnection({ iceServers: [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] }] });
+// --- ICE-servers (STUN, en TURN als de Worker dat heeft) ---
+
+/** Terugval: enkel STUN van Cloudflare (nooit van Google). */
+const STUN: RTCIceServer[] = [{ urls: 'stun:stun.cloudflare.com:3478' }];
+
+function leesIceServers(x: unknown): RTCIceServer[] {
+  if (!Array.isArray(x)) return [];
+  const uit: RTCIceServer[] = [];
+  for (const s of x.slice(0, 8)) {
+    if (!isObj(s)) continue;
+    const urls = (Array.isArray(s.urls) ? s.urls : [s.urls]).filter((u): u is string => typeof u === 'string' && /^(stun|turns?):/.test(u));
+    if (!urls.length) continue;
+    const server: RTCIceServer = { urls };
+    if (typeof s.username === 'string') server.username = s.username;
+    if (typeof s.credential === 'string') server.credential = s.credential;
+    uit.push(server);
+  }
+  return uit;
+}
+
+async function haalIce(): Promise<RTCIceServer[]> {
+  try {
+    const r = await fetch(`/hq/ice${IK_QUERY}`, { redirect: 'manual', cache: 'no-store', headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(5000) });
+    if (!r.ok || !(r.headers.get('content-type') ?? '').includes('json')) return STUN;
+    const d: unknown = await r.json();
+    const lijst = isObj(d) ? leesIceServers(d.iceServers) : [];
+    return lijst.length ? lijst : STUN;
+  } catch {
+    return STUN;
+  }
+}
+
+/** Eén keer per gesprek ophalen (TURN-gegevens zijn kort geldig), al bij het bellen zodat het klaar is bij het opnemen. */
+const iceServers = () => (ice ??= haalIce());
+
+// --- Het gesprek ---
+
+/** De verbinding lukt niet: ophangen met een duidelijke melding. */
+function mislukt() {
+  hangup(true);
+  note('Verbinding mislukt.');
+}
+
+/** Blijft het te lang op "verbinden" staan (de ander antwoordt nooit), dan ophangen. */
+function startVerbindTimer(nr: number) {
+  clearTimeout(verbindTimer);
+  verbindTimer = setTimeout(() => {
+    if (nr === gesprek && state.status === 'verbinden') mislukt();
+  }, 60_000);
+}
+
+function makePeer(peer: string, local: MediaStream, servers: RTCIceServer[], beller: boolean) {
+  const conn = new RTCPeerConnection({ iceServers: servers });
   local.getTracks().forEach((t) => conn.addTrack(t, local));
   conn.onicecandidate = (e) => {
-    if (e.candidate) void post(peer, 'ice', e.candidate.toJSON());
+    if (pc === conn && e.candidate) void post(peer, 'ice', e.candidate.toJSON());
   };
   conn.ontrack = (e) => {
-    const remote = e.streams[0] ?? new MediaStream([e.track]);
-    set({ remote, status: 'verbonden' });
+    if (pc !== conn) return;
+    clearTimeout(verbindTimer);
+    set({ remote: e.streams[0] ?? new MediaStream([e.track]), status: 'verbonden' });
+  };
+  conn.oniceconnectionstatechange = () => {
+    if (pc !== conn) return;
+    clearTimeout(iceTimer);
+    const st = conn.iceConnectionState;
+    if (st === 'failed') return mislukt();
+    // Even weg (wifi-wissel): 5 s wachten, dan de ICE-verbinding opnieuw opbouwen.
+    if (st === 'disconnected') iceTimer = setTimeout(() => void herstelIce(conn, peer, beller), 5000);
   };
   conn.onconnectionstatechange = () => {
-    if (conn.connectionState === 'failed') {
-      note('De verbinding is weggevallen.');
-      hangup(true);
-    }
+    if (pc === conn && conn.connectionState === 'failed') mislukt();
   };
   pc = conn;
   return conn;
 }
 
-async function flushIce() {
-  for (const c of pendingIce) await pc?.addIceCandidate(c).catch(() => {});
+/** ICE opnieuw opbouwen. Enkel de beller maakt een nieuw aanbod, zodat ze nooit tegelijk een aanbod sturen. */
+async function herstelIce(conn: RTCPeerConnection, peer: string, beller: boolean) {
+  if (pc !== conn || conn.iceConnectionState !== 'disconnected') return;
+  conn.restartIce();
+  if (!beller || conn.signalingState !== 'stable') return;
+  try {
+    const offer = await conn.createOffer({ iceRestart: true });
+    if (pc !== conn) return;
+    await conn.setLocalDescription(offer);
+    if (pc !== conn) return;
+    await post(peer, 'aanbod', offer);
+  } catch {
+    /* lukt het niet, dan wordt de verbinding 'failed' en hangen we op */
+  }
+}
+
+async function flushIce(conn: RTCPeerConnection) {
+  const lijst = pendingIce;
   pendingIce = [];
+  for (const c of lijst) await conn.addIceCandidate(c).catch(() => {});
 }
 
 function cleanup() {
+  gesprek++;
   clearTimeout(ringTimer);
-  clearInterval(fakeTimer);
-  pc?.close();
+  clearTimeout(verbindTimer);
+  clearTimeout(iceTimer);
+  if (pc) {
+    pc.onicecandidate = null;
+    pc.ontrack = null;
+    pc.oniceconnectionstatechange = null;
+    pc.onconnectionstatechange = null;
+    pc.close();
+  }
   pc = null;
   pendingIce = [];
-  state.local?.getTracks().forEach((t) => t.stop());
-  set({ status: 'idle', peer: null, local: null, remote: null, muted: false, camOff: false });
+  peerSid = null;
+  ice = null;
+  stopMedia(state.local);
+  set({ status: 'idle', peer: null, local: null, remote: null, muted: false, camOff: false, zonderCamera: false });
+}
+
+/** Camera en microfoon (en ICE-servers) voor gesprek `nr`. Is dat gesprek intussen voorbij, dan alles weer uit en null. */
+async function mediaVoor(nr: number) {
+  const [local, servers] = await Promise.all([getMedia(), iceServers()]);
+  if (nr !== gesprek || state.status !== 'verbinden') {
+    stopMedia(local);
+    return null;
+  }
+  set({ local, zonderCamera: kaartTimers.has(local) });
+  return { local, servers };
 }
 
 /** Bellen naar een collega (aankloppen bij het kantoor). */
 export async function call(peer: string) {
-  if (!state.me || state.status !== 'idle') return;
+  if (!state.me || state.status !== 'idle' || peer === state.me) return;
+  const nr = ++gesprek;
+  peerSid = null;
   set({ status: 'uitgaand', peer });
-  const ok = await post(peer, 'bellen');
+  void iceServers();
+  // Naar alle tabbladen van de ander: wie het eerst opneemt, krijgt het gesprek.
+  const ok = await post(peer, 'bellen', null, null);
+  if (nr !== gesprek) return;
   if (!ok) {
     cleanup();
     note(`${nameOf(peer)} is nu niet in het HQ.`);
     return;
   }
   ringTimer = setTimeout(() => {
-    if (state.status === 'uitgaand') {
-      void post(peer, 'ophangen');
-      cleanup();
-      note(`${nameOf(peer)} neemt niet op.`);
-    }
+    if (nr !== gesprek || state.status !== 'uitgaand') return;
+    void post(peer, 'ophangen', null, null);
+    cleanup();
+    note(`${nameOf(peer)} neemt niet op.`);
   }, 45_000);
 }
 
 export async function accept() {
   if (state.status !== 'inkomend' || !state.peer) return;
   const peer = state.peer;
+  const nr = gesprek;
+  clearTimeout(ringTimer);
   set({ status: 'verbinden' });
-  const local = await getMedia();
-  set({ local });
-  makePeer(peer, local);
-  await post(peer, 'aanvaard');
+  startVerbindTimer(nr);
+  const m = await mediaVoor(nr);
+  if (!m) return;
+  makePeer(peer, m.local, m.servers, false);
+  if (!(await post(peer, 'aanvaard')) && nr === gesprek) mislukt();
 }
 
 export function decline() {
-  if (state.peer) void post(state.peer, 'geweigerd');
+  if (state.peer && state.status === 'inkomend') void post(state.peer, 'geweigerd');
   cleanup();
 }
 
@@ -284,60 +640,120 @@ export function toggleCam() {
   set({ camOff });
 }
 
-async function onMessage(m: { van: string; soort: string; data: any }) {
-  const { van, soort, data } = m;
+async function onMessage(m: Bericht) {
+  const { van, vanSid, soort, data } = m;
+
+  // Nog geen beeld of geluid uitgewisseld: de oproep loopt nog, er is geen gesprek om te beschermen.
+  const nogGeenGesprek = state.status === 'inkomend' || (state.status === 'verbinden' && !pc?.remoteDescription);
+
+  // Een ander tabblad van mezelf nam de oproep op (of weigerde ze): hier stoppen met rinkelen.
+  if (soort === 'elders') {
+    const vanBeller = van === state.peer && (!peerSid || !vanSid || vanSid === peerSid);
+    if (state.status === 'inkomend' || (nogGeenGesprek && vanBeller)) {
+      cleanup();
+      note('Beantwoord in een ander tabblad.');
+    }
+    return;
+  }
+  if (van === state.me) return;
+  // Online: na het opnemen telt enkel het tabblad van de ander dat in het gesprek zit. Een "ophangen" vóór er
+  // een gesprek is (de beller haakte in), mag van elk tabblad van de beller komen.
+  const anderTabblad = !!peerSid && !!vanSid && vanSid !== peerSid && !(soort === 'ophangen' && nogGeenGesprek);
+
   switch (soort) {
-    case 'bellen':
-      if (state.status !== 'idle') return void post(van, 'bezet');
+    case 'bellen': {
+      if (state.status === 'inkomend' && state.peer === van) return;
+      if (state.status !== 'idle') return void post(van, 'bezet', null, vanSid);
+      const nr = ++gesprek;
+      peerSid = vanSid;
       set({ status: 'inkomend', peer: van });
-      return;
-    case 'aanvaard': {
-      if (state.status !== 'uitgaand' || state.peer !== van) return;
-      clearTimeout(ringTimer);
-      set({ status: 'verbinden' });
-      const local = await getMedia();
-      set({ local });
-      const conn = makePeer(van, local);
-      const offer = await conn.createOffer();
-      await conn.setLocalDescription(offer);
-      await post(van, 'aanbod', offer);
+      void iceServers();
+      // Hangt de beller nooit op (tabblad dicht), dan blijft het hier niet eeuwig rinkelen.
+      ringTimer = setTimeout(() => {
+        if (nr !== gesprek || state.status !== 'inkomend') return;
+        cleanup();
+        note(`Gemiste oproep van ${nameOf(van)}.`);
+      }, 50_000);
       return;
     }
-    case 'aanbod':
-      if (!pc || state.peer !== van) return;
-      await pc.setRemoteDescription(data);
-      await flushIce();
-      {
-        const answer = await pc.createAnswer();
-        await pc.setLocalDescription(answer);
-        await post(van, 'antwoord', answer);
+    case 'aanvaard': {
+      // Een tweede tabblad van de ander nam ook op: dat tabblad laten stoppen.
+      if (state.peer === van && peerSid && vanSid && vanSid !== peerSid) return void post(van, 'elders', null, vanSid);
+      if (state.status !== 'uitgaand' || state.peer !== van) return;
+      const nr = gesprek;
+      peerSid = vanSid;
+      clearTimeout(ringTimer);
+      set({ status: 'verbinden' });
+      startVerbindTimer(nr);
+      const media = await mediaVoor(nr);
+      if (!media) return;
+      const conn = makePeer(van, media.local, media.servers, true);
+      try {
+        const offer = await conn.createOffer();
+        if (pc !== conn) return;
+        await conn.setLocalDescription(offer);
+        if (pc !== conn) return;
+        if (!(await post(van, 'aanbod', offer)) && pc === conn) mislukt();
+      } catch {
+        if (pc === conn) mislukt();
       }
       return;
-    case 'antwoord':
-      if (!pc || state.peer !== van) return;
-      await pc.setRemoteDescription(data);
-      await flushIce();
+    }
+    case 'aanbod': {
+      if (!pc || state.peer !== van || anderTabblad) return;
+      const sdp = alsSdp(data, 'offer');
+      if (!sdp) return;
+      const conn = pc;
+      try {
+        await conn.setRemoteDescription(sdp);
+        await flushIce(conn);
+        const answer = await conn.createAnswer();
+        if (pc !== conn) return;
+        await conn.setLocalDescription(answer);
+        if (pc !== conn) return;
+        await post(van, 'antwoord', answer);
+      } catch {
+        /* ongeldig of te laat: negeren */
+      }
       return;
-    case 'ice':
-      if (state.peer !== van) return;
-      if (pc?.remoteDescription) await pc.addIceCandidate(data).catch(() => {});
-      else pendingIce.push(data);
+    }
+    case 'antwoord': {
+      if (!pc || state.peer !== van || anderTabblad || pc.signalingState !== 'have-local-offer') return;
+      const sdp = alsSdp(data, 'answer');
+      if (!sdp) return;
+      const conn = pc;
+      try {
+        await conn.setRemoteDescription(sdp);
+        await flushIce(conn);
+      } catch {
+        /* ongeldig of dubbel antwoord: negeren */
+      }
       return;
+    }
+    case 'ice': {
+      if (state.peer !== van || anderTabblad) return;
+      const c = alsIce(data);
+      if (!c) return;
+      if (pc?.remoteDescription) await pc.addIceCandidate(c).catch(() => {});
+      else if (pendingIce.length < 100) pendingIce.push(c);
+      return;
+    }
     case 'geweigerd':
-      if (state.peer !== van) return;
+    case 'bezet': {
+      if (state.peer !== van || anderTabblad) return;
+      // Nog aan het rinkelen bij de ander: ook de andere tabbladen van de ander laten stoppen.
+      if (state.status === 'uitgaand') void post(van, 'ophangen', null, null);
       cleanup();
-      note(`${nameOf(van)} kan nu niet.`);
+      note(soort === 'bezet' ? `${nameOf(van)} zit al in een gesprek.` : `${nameOf(van)} kan nu niet.`);
       return;
-    case 'bezet':
-      if (state.peer !== van) return;
+    }
+    case 'ophangen': {
+      if (state.peer !== van || anderTabblad) return;
+      const gemist = state.status === 'inkomend';
       cleanup();
-      note(`${nameOf(van)} zit al in een gesprek.`);
+      note(gemist ? `Gemiste oproep van ${nameOf(van)}.` : `${nameOf(van)} heeft opgehangen.`);
       return;
-    case 'ophangen':
-      if (state.peer !== van) return;
-      cleanup();
-      note(`${nameOf(van)} heeft opgehangen.`);
-      return;
+    }
   }
 }
 

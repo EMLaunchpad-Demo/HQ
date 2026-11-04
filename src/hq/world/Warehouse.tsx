@@ -1,5 +1,6 @@
-// Het HQ als warehouse: één grote hal in rode baksteen met een glazen voorgevel en een zinken dak.
-// Binnen: gepolijst beton, witte baksteen, zwarte stalen spanten en luchtkokers. Onder een tussenverdieping die
+// Het HQ als warehouse: zwarte golfplaat op een stalen skelet, grote glaspartijen, een betonnen plint en cederhout
+// rond de inkom. Binnen: gepolijst beton, betonnen wandpanelen, zwarte stalen spanten en luchtkokers.
+// Kies je een ruimte, dan gaat het HQ in "Sims-modus": dak en plafonds weg, muren aan de camerakant omlaag. Onder een tussenverdieping die
 // helemaal rond loopt, heeft elke afdeling een eigen glazen ruimte; in het midden een open arena met de War Room,
 // de pooltafel en de pingpongtafel. Boven: de kantoren van de founders, de gaming room en het salon.
 import { useEffect, useLayoutEffect, useMemo, useRef } from 'react';
@@ -7,28 +8,34 @@ import * as THREE from 'three';
 import { Billboard, RoundedBox, Text } from '@react-three/drei';
 import type { ThreeEvent } from '@react-three/fiber';
 import { FONT, FONT_MONO, FONT_REGULAR } from '../fonts';
-import { brandGradientTex, brickTex, carpetTex, concreteTex, screenTex, walnutTex, woodTex, zincTex } from '../textures';
+import { brandGradientTex, carpetTex, cedarTex, concretePanelTex, concreteTex, corrugatedTex, screenTex, walnutTex, woodTex, zincTex } from '../textures';
 import { config } from '../../config';
-import { floors, isBusy, isOpen, isOverdue, tasksByOwner, useHq, warRoomTasks, type FloorModel, type HqTaak, type LiveWork, type Occupant } from '../model';
+import { floors, isBusy, isOpen, isOverdue, takenStand, tasksByOwner, useHq, warRoomTasks, type FloorModel, type HqTaak, type LiveWork, type Occupant } from '../model';
 import { ui, useUi } from '../ui';
 import { useCall } from '../call';
 import { Character, MOOD_COLOR, type Mood } from './Character';
-import { Booth, Chair, CoffeeTable, Desk, Kitchenette, MeetingTable, Plant, Planter, Rug, Shelf, Sofa, WaterCooler } from './Furniture';
-import { Gaming, PingPong, PoolTable, Salon } from './Lounge';
+import { Booth, Chair, CoffeeTable, Desk, MeetingTable, Plant, Planter, Rug, Shelf, Sofa } from './Furniture';
+import { Gaming, PingPong, PoolTable } from './Lounge';
+import { ArenaCourt, BrandWall, FloorLogo, Fitness, Kitchen, KitchenLounge, MezzLed, Studio } from './Extras';
 import { TaskBoard } from './TaskBoard';
 import { B, ROOM_H, glassMat, steelMat } from './dims';
+import { CUT, CutContext, useCut, type Cut } from './cut';
+import { GlassFront } from './parts';
 
 const { W, D, H, RISE, MZ, MD } = B;
 const IX = W / 2 - MD; // binnenrand van de tussenverdieping (x)
 const IZ = D / 2 - MD; // binnenrand (z)
 const LIVE_MS = 30 * 60_000;
 
-export function moodOf(tasks: HqTaak[] = [], live?: LiveWork): Mood {
+
+
+/** `takenOk` = false als Notion niet bereikbaar is of de lijst verouderd: dan nooit "niets open", maar grijs (onbekend). */
+export function moodOf(tasks: HqTaak[] = [], live?: LiveWork, takenOk = true): Mood {
   if (live && !live.done && Date.now() - live.since < LIVE_MS) return 'bezig';
   if (tasks.some(isBusy)) return 'bezig';
   if (tasks.some((t) => t.status === 'Volgende')) return 'volgende';
   if (tasks.some(isOpen)) return 'open';
-  return 'rust';
+  return takenOk ? 'rust' : 'offline';
 }
 
 const lighten = (hex: string, k: number) => '#' + new THREE.Color(hex).lerp(new THREE.Color('#ffffff'), k).getHexString();
@@ -54,20 +61,23 @@ const ROOMS: Record<string, Room> = {
 const SPARE: Room = { x: IX + MD / 2, z: -3.5, w: 11, d: MD, facing: '-x' };
 
 /** Camera per ruimte: van waar je kijkt en waarnaar (lokaal). */
-export function zoneView(zoneId: string, kind: 'dept' | 'inkom' | 'lounge' | 'directie'): { pos: [number, number, number]; target: [number, number, number] } {
-  if (kind === 'inkom') return { pos: [5.5, 5.2, 8.6], target: [0, 1.2, 0.6] };
-  if (kind === 'lounge') return { pos: [10, 8.2, 4], target: [-3, 2, -4.5] };
-  if (kind === 'directie') return { pos: [0, 6.4, 2], target: [0, MZ + 1.1, -IZ - MD / 2] };
+export type ZoneKind = 'dept' | 'inkom' | 'lounge' | 'directie' | 'studio' | 'keuken';
+
+export function zoneView(zoneId: string, kind: ZoneKind): { pos: [number, number, number]; target: [number, number, number] } {
+  // Sims-zicht: schuin van boven, dak weg en muren omlaag, zodat je in de ruimte kijkt.
+  if (kind === 'inkom') return { pos: [10, 16, 17], target: [0, 0.6, 1.5] };
+  if (kind === 'lounge') return { pos: [14, 17, 12], target: [-2, MZ * 0.6, -3] };
+  if (kind === 'studio') return { pos: [15, 17, 27], target: [11, 0.5, 11.5] };
+  if (kind === 'keuken') return { pos: [-2, 18, 23], target: [-13, 0.5, 8] };
+  if (kind === 'directie') return { pos: [7, MZ + 11, 1.5], target: [0, MZ + 0.6, -IZ - MD / 2] };
   const r = ROOMS[zoneId] ?? SPARE;
-  // Recht voor de glazen voorkant, op ooghoogte (onder de tussenverdieping door).
-  const back = r.w > 12 ? 9 : 7;
-  if (r.facing === 'z') return { pos: [r.x, 2.6, r.z + MD / 2 + back], target: [r.x, 1.25, r.z - 0.5] };
+  if (r.facing === 'z') return { pos: [r.x + 6, 12, r.z + 11.5], target: [r.x, 0.5, r.z + 0.3] };
   const s = r.facing === 'x' ? 1 : -1;
-  return { pos: [r.x + s * (MD / 2 + back), 2.6, r.z], target: [r.x - s * 0.5, 1.25, r.z] };
+  return { pos: [r.x + s * 11.5, 12, r.z + 6], target: [r.x + s * 0.3, 0.5, r.z] };
 }
 
-export const zoneKind = (f: FloorModel): 'dept' | 'inkom' | 'lounge' | 'directie' =>
-  f.offices.length ? 'directie' : f.lounge ? 'lounge' : f.groups.some((g) => g.members[0]?.kind === 'cos') ? 'inkom' : 'dept';
+export const zoneKind = (f: FloorModel): ZoneKind =>
+  f.offices.length ? 'directie' : f.lounge ? 'lounge' : f.studio ? 'studio' : f.kitchen ? 'keuken' : f.groups.some((g) => g.members[0]?.kind === 'cos') ? 'inkom' : 'dept';
 
 /** Kantoor van een founder op de tussenverdieping (x, lokaal). */
 export function officeSlot(officeId: string) {
@@ -87,6 +97,8 @@ interface Ctx {
   active: boolean;
   focus: string | null;
   level: number;
+  /** Zijn de taken te geloven (zie takenStand in model.ts)? */
+  takenOk: boolean;
 }
 
 const click = (id: string, level: number) => (e: ThreeEvent<MouseEvent>) => {
@@ -124,37 +136,9 @@ const M = {
   lamp: new THREE.MeshStandardMaterial({ color: '#ffffff', emissive: '#ffe6bf', emissiveIntensity: 2.2 }),
 };
 
-/** Glazen gevel met zwarte stalen kaders, zoals de kantoren op de referentiefoto. */
-function GlassFront({ w, h, every = 2.5, door = true, hidePane = false }: { w: number; h: number; every?: number; door?: boolean; hidePane?: boolean }) {
-  const n = Math.max(1, Math.round(w / every));
-  return (
-    <group>
-      {!hidePane && (
-        <mesh position-y={h / 2} material={glassMat}>
-          <planeGeometry args={[w, h]} />
-        </mesh>
-      )}
-      {Array.from({ length: n + 1 }, (_, i) => (
-        <mesh key={i} position={[(i / n - 0.5) * w, h / 2, 0]} material={steelMat}>
-          <boxGeometry args={[0.07, h, 0.08]} />
-        </mesh>
-      ))}
-      {[0.04, h - 0.04, 1.05].map((y) => (
-        <mesh key={y} position={[0, y, 0]} material={steelMat}>
-          <boxGeometry args={[w, 0.06, 0.08]} />
-        </mesh>
-      ))}
-      {door && (
-        <mesh position={[w / 2 - 1.2, 1.1, 0.06]} material={steelMat}>
-          <boxGeometry args={[0.03, 0.4, 0.06]} />
-        </mesh>
-      )}
-    </group>
-  );
-}
-
 /** Donker plafond met lange lichtlijnen, zoals in de glazen ruimtes op de referentiefoto's. */
 function DarkCeiling({ w, d }: { w: number; d: number }) {
+  if (useCut() === 'beneden') return null;
   return (
     <group position-y={ROOM_H - 0.01}>
       <mesh rotation-x={Math.PI / 2}>
@@ -172,6 +156,7 @@ function DarkCeiling({ w, d }: { w: number; d: number }) {
 
 /** Vergaderzaal naar de referentiefoto: glas rondom, lange eiken tafel, groene stoelen, hanglampen en een scherm. */
 function MeetingRoom({ room, ctx }: { room: Room; ctx: Ctx }) {
+  const rh = useCut() === 'beneden' ? CUT : ROOM_H;
   const rot = room.facing === 'z' ? 0 : room.facing === 'x' ? Math.PI / 2 : -Math.PI / 2;
   const seats = 10;
   const len = Math.min(room.w - 3, 6.5);
@@ -180,11 +165,11 @@ function MeetingRoom({ room, ctx }: { room: Room; ctx: Ctx }) {
       <DarkCeiling w={room.w} d={room.d} />
       {[-1, 1].map((s) => (
         <group key={s} position-x={(s * room.w) / 2} rotation-y={Math.PI / 2}>
-          <GlassFront w={room.d} h={ROOM_H} every={2.5} door={false} />
+          <GlassFront w={room.d} h={rh} every={2.5} door={false} />
         </group>
       ))}
       <group position-z={room.d / 2}>
-        <GlassFront w={room.w} h={ROOM_H} every={2.2} hidePane={ctx.active} />
+        <GlassFront w={room.w} h={rh} every={2.2} hidePane={ctx.active} />
       </group>
       {/* Tafel en stoelen */}
       <mesh position={[0, 0.75, 0]} material={M.oak} castShadow>
@@ -240,14 +225,14 @@ function MeetingRoom({ room, ctx }: { room: Room; ctx: Ctx }) {
 function DeskRow({ group, cx, ctx }: { group: FloorModel['groups'][number]; cx: number; ctx: Ctx }) {
   const [head, ...roles] = group.members;
   const tasks = ctx.byOwner[head.id] ?? [];
-  const headMood = moodOf(tasks, ctx.live[head.id]);
+  const headMood = moodOf(tasks, ctx.live[head.id], ctx.takenOk);
   const people = [head, ...roles];
   const gap = 1.9;
   return (
     <group position-x={cx}>
       {people.map((p, i) => {
         const x = (i - (people.length - 1) / 2) * gap;
-        const mood = p.kind === 'rol' ? (moodOf([], ctx.live[p.id]) === 'bezig' || headMood === 'bezig' ? 'bezig' : headMood === 'rust' ? 'rust' : 'open') : headMood;
+        const mood = p.kind === 'rol' ? (moodOf([], ctx.live[p.id]) === 'bezig' || headMood === 'bezig' ? 'bezig' : headMood === 'rust' || headMood === 'offline' ? headMood : 'open') : headMood;
         return (
           <group key={p.id} position={[x, 0, 0.1]}>
             <Desk screen={MOOD_COLOR[mood]} wide={p.kind === 'hoofd'} lite={!ctx.active} />
@@ -360,6 +345,7 @@ const THEME: Record<string, { floor: 'hout' | 'tapijt'; wall: string; sign: stri
 
 /** Een afdelingsruimte onder de tussenverdieping. Lokaal: glazen voorkant op +z, achtermuur op -z. */
 function DeptRoom({ floor, room, ctx }: { floor: FloorModel; room: Room; ctx: Ctx }) {
+  const rh = useCut() === 'beneden' ? CUT : ROOM_H;
   const theme = THEME[floor.id] ?? { floor: 'hout', wall: floor.groups[0]?.color ?? '#13c7e6', sign: floor.label.toUpperCase() };
   const rot = room.facing === 'z' ? 0 : room.facing === 'x' ? Math.PI / 2 : -Math.PI / 2;
   const groups = floor.groups;
@@ -370,7 +356,7 @@ function DeptRoom({ floor, room, ctx }: { floor: FloorModel; room: Room; ctx: Ct
   const boardTasks = ctx.byOwner[groups[0]?.members[0]?.id ?? ''] ?? [];
   return (
     <group position={[room.x, 0, room.z]} rotation-y={rot}>
-      <mesh rotation-x={-Math.PI / 2} position-y={0.01} receiveShadow>
+      <mesh rotation-x={-Math.PI / 2} position-y={0.05} receiveShadow>
         <planeGeometry args={[room.w, room.d]} />
         {theme.floor === 'hout' ? <meshStandardMaterial map={wood} roughness={0.6} /> : <meshStandardMaterial map={carpet} roughness={1} />}
       </mesh>
@@ -388,13 +374,13 @@ function DeptRoom({ floor, room, ctx }: { floor: FloorModel; room: Room; ctx: Ct
       </mesh>
       {/* Zijwanden (gedeeld met de buren) */}
       {[-1, 1].map((s) => (
-        <mesh key={s} position={[(s * room.w) / 2, ROOM_H / 2, 0]} material={M.white}>
-          <boxGeometry args={[0.12, ROOM_H, room.d]} />
+        <mesh key={s} position={[(s * room.w) / 2, rh / 2, 0]} material={M.white}>
+          <boxGeometry args={[0.12, rh, room.d]} />
         </mesh>
       ))}
       <DarkCeiling w={room.w} d={room.d} />
       <group position-z={room.d / 2}>
-        <GlassFront w={room.w} h={ROOM_H} hidePane={ctx.active} />
+        <GlassFront w={room.w} h={rh} hidePane={ctx.active} />
       </group>
       {/* Takenbord aan de achtermuur */}
       <group position={[room.w / 2 - 2.6, 1.95, -room.d / 2 + 0.08]}>
@@ -591,6 +577,8 @@ function WalnutOffice({ o, w, d, h, mood, ctx, online }: { o: Occupant; w: numbe
   const panelSide = useMemo(() => walnutTex([d / 2.5, h / 2.5]), [d, h]);
   const ceil = useMemo(() => walnutTex([w / 2.5, d / 2.5]), [w, d]);
   const screen = useMemo(() => new THREE.MeshStandardMaterial({ color: '#000', emissive: '#ffffff', emissiveMap: screenTex(MOOD_COLOR[mood]), emissiveIntensity: 0.9 }), [mood]);
+  const open = useCut() === 'boven'; // Sims-modus: plafond weg, zijwanden laag
+  const sh = open ? CUT : h;
   return (
     <group>
       {/* Lambrisering en houten plafond */}
@@ -599,15 +587,17 @@ function WalnutOffice({ o, w, d, h, mood, ctx, online }: { o: Occupant; w: numbe
         <meshStandardMaterial map={panel} roughness={0.5} />
       </mesh>
       {[-1, 1].map((s) => (
-        <mesh key={s} position={[s * (w / 2 - 0.06), h / 2, 0]} rotation-y={-s * (Math.PI / 2)}>
-          <planeGeometry args={[d, h]} />
+        <mesh key={s} position={[s * (w / 2 - 0.06), sh / 2, 0]} rotation-y={-s * (Math.PI / 2)}>
+          <planeGeometry args={[d, sh]} />
           <meshStandardMaterial map={panelSide} roughness={0.5} />
         </mesh>
       ))}
-      <mesh position-y={h} rotation-x={Math.PI / 2}>
-        <planeGeometry args={[w, d]} />
-        <meshStandardMaterial map={ceil} roughness={0.55} side={THREE.DoubleSide} />
-      </mesh>
+      {!open && (
+        <mesh position-y={h} rotation-x={Math.PI / 2}>
+          <planeGeometry args={[w, d]} />
+          <meshStandardMaterial map={ceil} roughness={0.55} side={THREE.DoubleSide} />
+        </mesh>
+      )}
       <mesh position-y={h - 0.25}>
         <sphereGeometry args={[0.22, 20, 14, 0, Math.PI * 2, 0, Math.PI * 0.6]} />
         <meshStandardMaterial color="#ffffff" emissive="#fff1d6" emissiveIntensity={1.4} side={THREE.DoubleSide} />
@@ -699,10 +689,11 @@ function WalnutOffice({ o, w, d, h, mood, ctx, online }: { o: Occupant; w: numbe
 /** Kantoor van een founder op de tussenverdieping, glas naar de arena. */
 function Office({ o, x, w, ctx, online }: { o: Occupant; x: number; w: number; ctx: Ctx; online: boolean }) {
   const tasks = ctx.byOwner[o.id] ?? [];
-  const mood: Mood = online ? moodOf(tasks) : 'offline';
+  const mood: Mood = online ? moodOf(tasks, undefined, ctx.takenOk) : 'offline';
   const call = useCall((s) => (s.peer === o.id && s.status === 'verbonden' ? s.remote : null));
   const d = MD;
   const h = 3;
+  const wh = useCut() === 'boven' ? CUT : h; // muren omlaag in Sims-modus
   const wood = useMemo(() => woodTex([w / 4, d / 4]), [w, d]);
   // Stijl van het kantoor uit team.config.json (hq.officeStyles), bv. "walnoot" voor Ebert.
   const walnoot = config.hq?.officeStyles?.[o.id] === 'walnoot';
@@ -713,12 +704,12 @@ function Office({ o, x, w, ctx, online }: { o: Occupant; x: number; w: number; c
         <meshStandardMaterial map={wood} roughness={0.55} color={ctx.focus === `kantoor-${o.id}` ? '#fff7ea' : '#ffffff'} />
       </mesh>
       {[-1, 1].map((s) => (
-        <mesh key={s} position={[(s * w) / 2, h / 2, 0]} material={M.white}>
-          <boxGeometry args={[0.1, h, d]} />
+        <mesh key={s} position={[(s * w) / 2, wh / 2, 0]} material={M.white}>
+          <boxGeometry args={[0.1, wh, d]} />
         </mesh>
       ))}
       <group position-z={d / 2 - 0.3}>
-        <GlassFront w={w} h={h} hidePane={ctx.active} />
+        <GlassFront w={w} h={wh} hidePane={ctx.active} />
       </group>
       {walnoot && <WalnutOffice o={o} w={w} d={d} h={h} mood={mood} ctx={ctx} online={online} />}
       {!walnoot && (
@@ -838,6 +829,22 @@ function Stair({ x, side }: { x: number; side: 1 | -1 }) {
   );
 }
 
+/** Stalen kolommen als lage stompjes, wanneer de tussenverdieping weg is (Sims-modus gelijkvloers). */
+function Columns() {
+  const cols: [number, number][] = [];
+  for (const x of [-IX, -9, -3, 3, 9, IX]) cols.push([x, -IZ], [x, IZ]);
+  for (const z of [-3, 3]) cols.push([-IX, z], [IX, z]);
+  return (
+    <group>
+      {cols.map(([x, z]) => (
+        <mesh key={`${x}${z}`} position={[x, CUT / 2, z]} material={steelMat}>
+          <boxGeometry args={[0.28, CUT, 0.28]} />
+        </mesh>
+      ))}
+    </group>
+  );
+}
+
 function Mezzanine() {
   const concrete = useMemo(() => concreteTex([10, 2]), []);
   const strips: [number, number, number, number][] = [
@@ -879,102 +886,164 @@ function Mezzanine() {
 
 /** Buitenschil: rode baksteen buiten, witte baksteen binnen, glazen voorgevel, zinken dak met lichtstraten. */
 function Shell() {
-  const outer = useMemo(() => brickTex([W / 4, H / 4]), []);
-  const outerSide = useMemo(() => brickTex([D / 4, H / 4]), []);
-  const inner = useMemo(() => brickTex([W / 3, H / 3], 'wit'), []);
-  const innerSide = useMemo(() => brickTex([D / 3, H / 3], 'wit'), []);
+  const cut = useCut();
+  // Muurhoogte: volledig van buiten, laag in Sims-modus (gelijkvloers), of tot net boven de tussenverdieping.
+  const wallH = cut === 'beneden' ? CUT : cut === 'boven' ? MZ + CUT : H;
+  const plinth = 0.9;
+  const ribbon = [5.2, 8.0]; // lichtstrook in de zijgevels
+  const clad = useMemo(() => corrugatedTex([W / 2.4, (H - plinth) / 2.4]), []);
+  const cladSide = useMemo(() => corrugatedTex([D / 2.4, 2]), []);
+  const inner = useMemo(() => concretePanelTex([W / 3, H / 3]), []);
+  const innerSide = useMemo(() => concretePanelTex([D / 3, H / 3]), []);
+  const cedar = useMemo(() => cedarTex([1.6, H / 2.5]), []);
   const slope = Math.hypot(D / 2, RISE);
   const ang = Math.atan2(RISE, D / 2);
   const zinc = useMemo(() => zincTex([slope / 3, (W + 1) / 3]), [slope]);
   const gable = useMemo(() => {
     const s = new THREE.Shape();
-    s.moveTo(-D / 2 - 0.4, 0);
-    s.lineTo(D / 2 + 0.4, 0);
+    s.moveTo(-D / 2 - 0.3, 0);
+    s.lineTo(D / 2 + 0.3, 0);
     s.lineTo(0, RISE);
     s.closePath();
-    return new THREE.ExtrudeGeometry(s, { depth: 0.4, bevelEnabled: false });
+    return new THREE.ExtrudeGeometry(s, { depth: 0.3, bevelEnabled: false });
   }, []);
-  const gableBrick = useMemo(() => brickTex([0.25, 0.25]), []);
+  const gableClad = useMemo(() => corrugatedTex([D / 2.4, RISE / 2.4]), []);
+  const concrete = useMemo(() => new THREE.MeshStandardMaterial({ map: concreteTex([W / 4, 1]), color: '#a9a59e', roughness: 0.9 }), []);
+  const cladMat = useMemo(() => new THREE.MeshStandardMaterial({ map: clad, bumpMap: clad, bumpScale: 3, roughness: 0.55, metalness: 0.55 }), [clad]);
+  const cladSideMat = useMemo(() => new THREE.MeshStandardMaterial({ map: cladSide, bumpMap: cladSide, bumpScale: 3, roughness: 0.55, metalness: 0.55 }), [cladSide]);
   const sky = useMemo(() => new THREE.MeshStandardMaterial({ color: '#cfe6f5', emissive: '#bfe0f7', emissiveIntensity: 0.25, roughness: 0.1, metalness: 0.3 }), []);
+  // Stuk zijgevel tussen twee hoogtes (golfplaat), afgesneden op de muurhoogte.
+  const sidePart = (s: number, y0: number, y1: number, key: string) => {
+    const top = Math.min(y1, wallH);
+    if (top <= y0) return null;
+    return (
+      <mesh key={key} position={[s * (W / 2 + 0.15), (y0 + top) / 2, 0]} castShadow receiveShadow material={cladSideMat}>
+        <boxGeometry args={[0.3, top - y0, D + 0.6]} />
+      </mesh>
+    );
+  };
+  const frontH = Math.min(wallH, H);
   return (
     <group>
-      {/* Sokkel */}
+      {/* Sokkel en betonnen plint rondom */}
       <mesh position-y={-0.05} receiveShadow>
         <boxGeometry args={[W + 1.6, 0.12, D + 1.6]} />
-        <meshStandardMaterial color="#b9b3a8" roughness={0.9} />
+        <meshStandardMaterial color="#a9a49b" roughness={0.9} />
       </mesh>
-      {/* Achtermuur */}
-      <mesh position={[0, H / 2, -D / 2 - 0.2]} castShadow receiveShadow>
-        <boxGeometry args={[W + 0.8, H, 0.4]} />
-        <meshStandardMaterial map={outer} bumpMap={outer} bumpScale={-2.5} roughness={0.88} />
+      <mesh position={[0, plinth / 2, -D / 2 - 0.15]} material={concrete} castShadow receiveShadow>
+        <boxGeometry args={[W + 0.6, plinth, 0.32]} />
+      </mesh>
+      {[-1, 1].map((s) => (
+        <mesh key={s} position={[s * (W / 2 + 0.15), plinth / 2, 0]} material={concrete} castShadow receiveShadow>
+          <boxGeometry args={[0.32, plinth, D + 0.6]} />
+        </mesh>
+      ))}
+      {/* Achtergevel: golfplaat, blijft altijd staan (zoals de achterste muur in De Sims) */}
+      <mesh position={[0, plinth + (H - plinth) / 2, -D / 2 - 0.15]} castShadow receiveShadow material={cladMat}>
+        <boxGeometry args={[W + 0.6, H - plinth, 0.3]} />
       </mesh>
       <mesh position={[0, H / 2, -D / 2 + 0.01]}>
         <planeGeometry args={[W, H]} />
-        <meshStandardMaterial map={inner} bumpMap={inner} bumpScale={-1.5} roughness={0.9} />
+        <meshStandardMaterial map={inner} roughness={0.92} />
       </mesh>
-      {/* Zijmuren met puntgevel */}
+      {/* Zijgevels: golfplaat met een lange lichtstrook boven de tussenverdieping */}
       {[-1, 1].map((s) => (
         <group key={s}>
-          <mesh position={[s * (W / 2 + 0.2), H / 2, 0]} castShadow receiveShadow>
-            <boxGeometry args={[0.4, H, D + 0.8]} />
-            <meshStandardMaterial map={outerSide} bumpMap={outerSide} bumpScale={-2.5} roughness={0.88} />
+          {sidePart(s, plinth, ribbon[0], 'onder')}
+          {sidePart(s, ribbon[1], H, 'boven')}
+          {wallH > ribbon[0] && (
+            <group position={[s * (W / 2 + 0.16), ribbon[0], 0]} rotation-y={(s * Math.PI) / 2}>
+              <GlassFront w={D} h={Math.min(ribbon[1], wallH) - ribbon[0]} every={2.8} door={false} />
+            </group>
+          )}
+          <mesh position={[s * (W / 2 - 0.01), Math.min(wallH, H) / 2, 0]} rotation-y={-s * (Math.PI / 2)}>
+            <planeGeometry args={[D, Math.min(wallH, H)]} />
+            <meshStandardMaterial map={innerSide} roughness={0.92} />
           </mesh>
-          <mesh position={[s * (W / 2 - 0.01), H / 2, 0]} rotation-y={-s * (Math.PI / 2)}>
-            <planeGeometry args={[D, H]} />
-            <meshStandardMaterial map={innerSide} bumpMap={innerSide} bumpScale={-1.5} roughness={0.9} />
-          </mesh>
-          <mesh geometry={gable} position={[s * (W / 2 + (s > 0 ? 0 : 0.4)), H, 0]} rotation-y={Math.PI / 2} castShadow>
-            <meshStandardMaterial map={gableBrick} roughness={0.9} />
-          </mesh>
+          {cut === 'geen' && (
+            <mesh geometry={gable} position={[s * (W / 2 + (s > 0 ? 0 : 0.3)), H, 0]} rotation-y={Math.PI / 2} castShadow>
+              <meshStandardMaterial map={gableClad} roughness={0.55} metalness={0.55} />
+            </mesh>
+          )}
+          {/* Zwarte stalen kolommen buiten op de gevel */}
+          {[-12, -4, 4, 12].map((z) => (
+            <mesh key={z} position={[s * (W / 2 + 0.38), wallH / 2, z]} material={steelMat} castShadow>
+              <boxGeometry args={[0.22, wallH, 0.34]} />
+            </mesh>
+          ))}
         </group>
       ))}
-      {/* Glazen voorgevel over de volle hoogte, met kaders op de hoogte van de tussenverdieping */}
+      {/* Voorgevel: glas over de volle hoogte tussen cederhouten koppen */}
       <group position-z={D / 2 + 0.05}>
-        <GlassFront w={W} h={H} every={2.5} door={false} />
-        <mesh position-y={MZ} material={steelMat}>
-          <boxGeometry args={[W, 0.35, 0.12]} />
+        <GlassFront w={W - 7} h={frontH} every={2.5} door={false} />
+        {[-1, 1].map((s) => (
+          <mesh key={s} position={[s * (W / 2 - 1.6), frontH / 2, 0.1]} castShadow receiveShadow>
+            <boxGeometry args={[3.6, frontH, 0.4]} />
+            <meshStandardMaterial map={cedar} roughness={0.75} />
+          </mesh>
+        ))}
+        {frontH > MZ && (
+          <mesh position-y={MZ} material={steelMat}>
+            <boxGeometry args={[W - 7, 0.35, 0.12]} />
+          </mesh>
+        )}
+        {frontH > 7 && (
+          <mesh position-y={7} material={steelMat}>
+            <boxGeometry args={[W - 7, 0.1, 0.1]} />
+          </mesh>
+        )}
+        {/* Inkom: cederhouten portaal met glazen deuren en stalen luifel */}
+        <mesh position={[0, Math.min(2.6, frontH) / 2, 0.05]} material={steelMat}>
+          <boxGeometry args={[3.4, Math.min(2.6, frontH), 0.1]} />
         </mesh>
-        <mesh position-y={7} material={steelMat}>
-          <boxGeometry args={[W, 0.1, 0.1]} />
-        </mesh>
-        {/* Toegangsdeur met luifel */}
-        <mesh position={[0, 1.3, 0.05]} material={steelMat}>
-          <boxGeometry args={[3.4, 2.6, 0.1]} />
-        </mesh>
-        <mesh position={[0, 1.27, 0.11]} material={glassMat}>
-          <planeGeometry args={[3.2, 2.5]} />
-        </mesh>
-        <mesh position={[0, 3.0, 1.6]} castShadow material={steelMat}>
-          <boxGeometry args={[9, 0.3, 3.2]} />
-        </mesh>
-        {/* Naam op de daklijst */}
-        <mesh position={[0, H - 0.35, 0.12]} material={steelMat}>
-          <boxGeometry args={[W + 0.8, 0.7, 0.16]} />
-        </mesh>
-        <Text font={FONT} fontSize={0.42} letterSpacing={0.3} color="#ffffff" position={[0, H - 0.35, 0.21]} anchorY="middle">
-          EM LAUNCHPAD
-        </Text>
-        <mesh position={[0, H - 0.72, 0.2]}>
-          <planeGeometry args={[W + 0.8, 0.06]} />
-          <meshBasicMaterial map={brandGradientTex()} toneMapped={false} />
-        </mesh>
-      </group>
-      {/* Dak: werpt geen schaduw naar binnen (lichtstraten), zodat de hal licht blijft */}
-      <group position-y={H}>
-        {[1, -1].map((s) => (
-          <group key={s}>
-            <mesh position={[0, RISE / 2 + 0.12, (s * D) / 4]} rotation-x={s * ang} receiveShadow>
-              <boxGeometry args={[W + 1.4, 0.24, slope + 0.9]} />
-              <meshStandardMaterial map={zinc} bumpMap={zinc} bumpScale={2} roughness={0.42} metalness={0.5} />
-            </mesh>
-            {[-12, -4, 4, 12].map((x) => (
-              <mesh key={x} position={[x, RISE / 2 + 0.25, (s * D) / 4]} rotation-x={s * ang} material={sky}>
-                <boxGeometry args={[3, 0.04, slope * 0.7]} />
+        {frontH > 2 && (
+          <mesh position={[0, 1.27, 0.11]} material={glassMat}>
+            <planeGeometry args={[3.2, 2.5]} />
+          </mesh>
+        )}
+        {cut === 'geen' && (
+          <>
+            {[-1, 1].map((s) => (
+              <mesh key={s} position={[s * 2.1, 1.7, 0.45]} castShadow>
+                <boxGeometry args={[0.5, 3.4, 0.9]} />
+                <meshStandardMaterial map={cedar} roughness={0.75} />
               </mesh>
             ))}
-          </group>
-        ))}
+            <mesh position={[0, 3.25, 1.6]} castShadow material={steelMat}>
+              <boxGeometry args={[9, 0.3, 3.2]} />
+            </mesh>
+            {/* Naam op de daklijst */}
+            <mesh position={[0, H - 0.35, 0.12]} material={steelMat}>
+              <boxGeometry args={[W + 0.8, 0.7, 0.16]} />
+            </mesh>
+            <Text font={FONT} fontSize={0.42} letterSpacing={0.3} color="#ffffff" position={[0, H - 0.35, 0.21]} anchorY="middle">
+              EM LAUNCHPAD
+            </Text>
+            <mesh position={[0, H - 0.72, 0.2]}>
+              <planeGeometry args={[W + 0.8, 0.06]} />
+              <meshBasicMaterial map={brandGradientTex()} toneMapped={false} />
+            </mesh>
+          </>
+        )}
       </group>
+      {/* Dak: zink met lichtstraten; verdwijnt in Sims-modus zodat je binnen kijkt */}
+      {cut === 'geen' && (
+        <group position-y={H}>
+          {[1, -1].map((s) => (
+            <group key={s}>
+              <mesh position={[0, RISE / 2 + 0.12, (s * D) / 4]} rotation-x={s * ang} receiveShadow>
+                <boxGeometry args={[W + 1.4, 0.24, slope + 0.9]} />
+                <meshStandardMaterial map={zinc} bumpMap={zinc} bumpScale={2} roughness={0.42} metalness={0.5} />
+              </mesh>
+              {[-12, -4, 4, 12].map((x) => (
+                <mesh key={x} position={[x, RISE / 2 + 0.25, (s * D) / 4]} rotation-x={s * ang} material={sky}>
+                  <boxGeometry args={[3, 0.04, slope * 0.7]} />
+                </mesh>
+              ))}
+            </group>
+          ))}
+        </group>
+      )}
     </group>
   );
 }
@@ -1033,7 +1102,7 @@ function Arena({ inkom, lounge, ctx, loungeCtx, taken }: { inkom?: FloorModel; l
   const cos = inkom?.groups[0]?.members[0];
   const war = useMemo(() => warRoomTasks(taken), [taken]);
   const hot = useMemo(() => taken.filter((t) => isOpen(t) && (isOverdue(t) || t.prioriteit === 'Hoog' || isBusy(t))).sort((a, b) => Number(isBusy(b)) - Number(isBusy(a))), [taken]);
-  const mood = moodOf(war, cos ? ctx.live[cos.id] : undefined);
+  const mood = moodOf(war, cos ? ctx.live[cos.id] : undefined, ctx.takenOk);
   return (
     <group>
       {/* War Room, vooraan in de arena met de schermen naar de inkom */}
@@ -1085,6 +1154,7 @@ function Arena({ inkom, lounge, ctx, loungeCtx, taken }: { inkom?: FloorModel; l
         <Rug w={4.4} d={3.2} color="#2a2f36" />
         <PoolTable />
       </group>
+      <ArenaCourt position={[7.5, 0, -5.2]} />
       <group position={[7.5, 0, -5.2]}>
         <PingPong />
       </group>
@@ -1110,15 +1180,12 @@ function Arena({ inkom, lounge, ctx, loungeCtx, taken }: { inkom?: FloorModel; l
   );
 }
 
-/** Boven: gaming room links, salon rechts, zithoeken vooraan. */
+/** Boven: gaming room links, fitness rechts (eigen component), zithoeken vooraan. */
 function UpperLounge() {
   return (
     <group position-y={MZ}>
       <group position={[-IX - MD / 2 - 0.1, 0, -3.5]}>
         <Gaming />
-      </group>
-      <group position={[IX + MD / 2 + 0.3, 0, -3.2]}>
-        <Salon />
       </group>
       {[-12, -4, 4, 12].map((x) => (
         <group key={x} position={[x, 0, IZ + 0.5]}>
@@ -1139,20 +1206,6 @@ function UpperLounge() {
       </group>
       <group position={[15, 0, -IZ - 2.2]}>
         <Shelf w={2.4} />
-      </group>
-    </group>
-  );
-}
-
-/** Koffiebar en keuken links vooraan op het gelijkvloers. */
-function CoffeeCorner() {
-  return (
-    <group position={[-IX - MD / 2, 0, 6]} rotation-y={Math.PI / 2}>
-      <group position={[0, 0, -2]}>
-        <Kitchenette accent="#13c7e6" />
-      </group>
-      <group position={[2.4, 0, -2.2]}>
-        <WaterCooler />
       </group>
     </group>
   );
@@ -1183,25 +1236,31 @@ export function Warehouse() {
   const taken = useHq((s) => s.taken);
   const live = useHq((s) => s.live);
   const online = useHq((s) => s.online);
+  const takenOk = useHq((s) => takenStand(s).ok);
   const byOwner = useMemo(() => tasksByOwner(taken), [taken]);
-  const ctxFor = (f?: FloorModel): Ctx => ({ byOwner, live, active: !!f && f.level === level, focus, level: f?.level ?? 0 });
+  const ctxFor = (f?: FloorModel): Ctx => ({ byOwner, live, active: !!f && f.level === level, focus, level: f?.level ?? 0, takenOk });
   const inkom = floors.find((f) => zoneKind(f) === 'inkom');
   const lounge = floors.find((f) => zoneKind(f) === 'lounge');
   const directie = floors.find((f) => zoneKind(f) === 'directie');
   const depts = floors.filter((f) => zoneKind(f) === 'dept');
   const floorTex = useMemo(() => concreteTex([12, 8]), []);
+  const chosen = floors.find((f) => f.level === level);
+  const kind = chosen ? zoneKind(chosen) : null;
+  const cut: Cut = !chosen ? 'geen' : kind === 'directie' || (kind === 'lounge' && focus !== 'beneden') ? 'boven' : 'beneden';
+  const upper = cut !== 'beneden'; // tussenverdieping tonen
   let spare = false;
   return (
+    <CutContext.Provider value={cut}>
     <group position={[0, 0, B.Z]}>
       <Shell />
-      <Ceiling />
-      <mesh rotation-x={-Math.PI / 2} position-y={0.005} receiveShadow>
+      {cut === 'geen' && <Ceiling />}
+      <mesh rotation-x={-Math.PI / 2} position-y={0.02} receiveShadow>
         <planeGeometry args={[W, D]} />
         <meshStandardMaterial map={floorTex} color="#c4c0b9" roughness={0.32} metalness={0.05} />
       </mesh>
-      <Mezzanine />
-      <Stair x={-IX + 0.85} side={-1} />
-      <Stair x={IX - 0.85} side={1} />
+      {upper ? <Mezzanine /> : <Columns />}
+      {upper && <Stair x={-IX + 0.85} side={-1} />}
+      {upper && <Stair x={IX - 0.85} side={1} />}
       {depts.map((f) => {
         let room = ROOMS[f.id];
         if (!room) {
@@ -1213,14 +1272,22 @@ export function Warehouse() {
       })}
       {depts.every((f) => ROOMS[f.id]) && <MeetingRoom room={SPARE} ctx={ctxFor(undefined)} />}
       <Arena inkom={inkom} lounge={lounge} ctx={ctxFor(inkom)} loungeCtx={ctxFor(lounge)} taken={taken} />
-      <CoffeeCorner />
-      <UpperLounge />
-      {directie &&
+      <Kitchen />
+      <KitchenLounge />
+      <Studio />
+      <BrandWall />
+      <FloorLogo />
+      {upper && <MezzLed />}
+      {upper && <UpperLounge />}
+      {upper && <Fitness />}
+      {upper &&
+        directie &&
         directie.offices.map((o) => {
           const slot = officeSlot(`kantoor-${o.id}`)!;
           return <Office key={o.id} o={o} x={slot.x} w={slot.w} ctx={ctxFor(directie)} online={online.includes(o.id)} />;
         })}
       {level < 0 && <HitShell />}
     </group>
+    </CutContext.Provider>
   );
 }

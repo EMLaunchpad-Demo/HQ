@@ -1,12 +1,11 @@
 {
-  "name": "em-launchpad-hq",
+  "name": "hq",
   "private": true,
   "version": "1.0.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc --noEmit && vite build",
-    "deploy": "npm run build && wrangler deploy"
+    "build": "tsc --noEmit && vite build"
   },
   "dependencies": {
     "@fontsource/archivo": "^5.3.0",

@@ -19,7 +19,9 @@
       { "id": "marketing", "label": "Marketing & Content", "departments": ["marketing"] },
       { "id": "bouw", "label": "AI & Automatisatie · Support", "departments": ["bouw", "support"] },
       { "id": "strategie", "label": "Strategie & Financiën", "departments": ["strategie"] },
-      { "id": "lounge", "label": "Lounge, gaming & biljart", "lounge": true },
+      { "id": "keuken", "label": "Keuken & lounge", "kitchen": true },
+      { "id": "studio", "label": "Content studio & podcast", "studio": true },
+      { "id": "lounge", "label": "Arena, gaming & fitness", "lounge": true },
       { "id": "directie", "label": "Directie", "offices": true }
     ],
     "people": [],

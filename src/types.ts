@@ -83,8 +83,12 @@ export interface HqFloor {
   agents?: string[];
   /** Ruimte met een eigen kantoor per founder (en per persoon met kantoor: true). */
   offices?: boolean;
-  /** Ontspanningsruimte (gaming, biljart, pingpong, salon). */
+  /** Ontspanningsruimte (pingpong-arena, biljart, gaming, fitness). */
   lounge?: boolean;
+  /** Content studio met podcastruimte. */
+  studio?: boolean;
+  /** Keuken met lounge en tv. */
+  kitchen?: boolean;
 }
 
 /** Een menselijk teamlid naast de founders. Met office: true krijgt die een kantoor op de directieverdieping, anders een bureau op `floor`. */

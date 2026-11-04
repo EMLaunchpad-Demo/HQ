@@ -1,24 +1,35 @@
 {
-  // Fase 2 van het HQ: de app online, achter Cloudflare Access (login). Zie ../HQ.md.
-  // Nog NIET gedeployed: eerst akkoord van Ebert of Martijn, en een route kiezen.
-  "name": "em-launchpad-hq",
+  // Gegenereerd door scripts/hq-export.mjs in ai-team (bron: ai-team/hq-cloud/wrangler.jsonc). Niet hier aanpassen.
+  // Online zetten: Workers Builds bij elke push naar main (build: npm run build, deploy: npx wrangler deploy).
+  "name": "hq",
   "main": "worker/worker.js",
   "compatibility_date": "2026-10-01",
-  // Geen openbaar *.workers.dev-adres en geen preview-links: het HQ is enkel bereikbaar via het eigen
-  // adres, en daar staat Cloudflare Access (login) voor. Zet Access aan VOOR de eerste deploy met route.
+  // Geen openbaar *.workers.dev-adres en geen preview-links: enkel het eigen adres, en daar staat Cloudflare Access voor.
   "workers_dev": false,
   "preview_urls": false,
-  // De gebouwde app (npm run build). De Worker beantwoordt /hq/* en /activity zelf.
+  // De gebouwde app. Elk verzoek gaat eerst langs de Worker (login-controle), pas daarna naar de bestanden.
+  // Geen SPA-terugval: een ontbrekend bestand geeft gewoon 404.
   "assets": {
     "directory": "./dist",
     "binding": "ASSETS",
-    "not_found_handling": "single-page-application",
-    "run_worker_first": ["/hq/*", "/activity"]
+    "run_worker_first": true
   },
   // Eén "kantoor" dat bijhoudt wie er in het HQ is en de call-berichtjes doorgeeft (WebSockets met hibernation: gratis plan).
+  // De klasse en de migratie nooit hernoemen of weghalen: dan maakt Cloudflare een nieuw, leeg kantoor of faalt de deploy.
   "durable_objects": { "bindings": [{ "name": "KANTOOR", "class_name": "Kantoor" }] },
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Kantoor"] }],
-  // Adres gekozen door Ebert (3/11/2026). Cloudflare Access (login via Microsoft) moet hierop staan VOOR de eerste deploy.
+  // Login: Cloudflare Access (teamdomein en AUD-tag van de app "hq.emlaunchpad.com"). Geen geheimen.
+  // FOUNDERS: e-mailadres uit de login → id in team.config.json. Een nieuwe persoon: hier toevoegen én in de Access-policy.
+  // DEV_ZONDER_LOGIN hoort hier NOOIT: dat zet enkel `npm run hq:cloud-test` (op localhost).
+  "vars": {
+    "ACCESS_TEAM_DOMAIN": "weathered-boat-3ff0.cloudflareaccess.com",
+    "ACCESS_AUD": "f2d5955a908c73c1ac031cc15c83ebca772cae778eb177545433cc64267c46be",
+    "FOUNDERS": "{\"martijn@emlaunchpad.com\":\"martijn\",\"ebert@emlaunchpad.com\":\"ebert\",\"ebert.vanbrabant@emlaunchpad.onmicrosoft.com\":\"ebert\"}"
+  },
+  // Logs en fouten zichtbaar in het Cloudflare-dashboard (Worker hq → Observability).
+  "observability": { "enabled": true },
+  // Adres gekozen door Ebert (3/11/2026), als eigen domein van de Worker.
   "routes": [{ "pattern": "hq.emlaunchpad.com", "custom_domain": true }]
-  // Geheim (zet een founder zelf, nooit in dit bestand): npx wrangler secret put NOTION_TOKEN
+  // Geheimen zet een founder zelf in het dashboard (Worker hq → Settings → Variables and Secrets, type Secret), nooit in dit bestand:
+  // NOTION_TOKEN (taken uit Notion), TURN_KEY_ID en TURN_KEY_API_TOKEN (TURN voor de videocall, optioneel).
 }

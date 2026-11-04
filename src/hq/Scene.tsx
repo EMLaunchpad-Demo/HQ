@@ -8,7 +8,7 @@ import { floors } from './model';
 import { ui, useUi } from './ui';
 import { Environment, Lights } from './world/Environment';
 import { Warehouse, officeSlot, zoneKind, zoneView } from './world/Warehouse';
-import { Parking } from './world/Lounge';
+import { Parking } from './world/Cars';
 import { B } from './world/dims';
 
 const v = (p: [number, number, number]) => new THREE.Vector3(p[0], p[1], p[2] + B.Z);
@@ -17,8 +17,8 @@ function aimFor(level: number, focus: string | null): { pos: THREE.Vector3; targ
   // Buiten: van rechtsvoor, zodat oprit, gebouw en parking samen in beeld zijn (het infopaneel zit links).
   if (level < 0) return { pos: new THREE.Vector3(44, 26, 46), target: new THREE.Vector3(-6, 4, B.Z + 8) };
   const office = focus ? officeSlot(focus) : null;
-  // Onder het plafond van het kantoor blijven (dat zit op 3 m boven de tussenverdieping).
-  if (office) return { pos: v([office.x + 1.2, B.MZ + 2.1, -3.2]), target: v([office.x - 0.3, B.MZ + 1.1, -11.8]) };
+  // Sims-zicht op het kantoor: schuin van boven (het plafond verdwijnt in Sims-modus).
+  if (office) return { pos: v([office.x + 4, B.MZ + 8, -3.5]), target: v([office.x, B.MZ + 0.6, -11.5]) };
   const f = floors.find((x) => x.level === level);
   if (!f) return { pos: new THREE.Vector3(44, 26, 46), target: new THREE.Vector3(-6, 4, B.Z + 8) };
   const view = zoneView(f.id, zoneKind(f));
@@ -134,7 +134,7 @@ export function HqScene({ onReady }: { onReady?: () => void }) {
       // Geen nabewerking achteraf (kostte 40 ms per beeld op een Intel-chip): randverzachting en filmische kleuren
       // gebeuren in de renderer zelf, verzadiging, contrast en vignet via CSS (zie HQApp).
       gl={{ antialias: true, powerPreference: 'high-performance', stencil: false, toneMappingExposure: 1.0 }}
-      camera={{ position: [4, 2.6, 62], fov: 35, near: 0.3, far: 900 }}
+      camera={{ position: [4, 2.6, 62], fov: 35, near: 0.6, far: 900 }}
       onCreated={({ gl, scene, camera }) => {
         if (import.meta.env.DEV) Object.assign(window, { hqGl: gl, hqScene: scene, hqCamera: camera });
       }}

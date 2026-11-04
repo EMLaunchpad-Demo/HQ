@@ -136,18 +136,27 @@ export interface LiveWork {
   done?: string;
 }
 
+type Bron = 'notion' | 'momentopname' | 'geen' | 'laden';
+
 interface HqState {
-  bron: 'notion' | 'momentopname' | 'geen' | 'laden';
+  bron: Bron;
   bijgewerkt: string | null;
+  /** Korte uitleg waarom de taken niet (helemaal) kloppen. */
   fout?: string;
   taken: HqTaak[];
+  /** De lijst is de laatst goede uit de cache van de Worker, niet de huidige. */
+  verouderd: boolean;
+  /** Tijd van die laatst goede lijst (bij verouderd). */
+  sinds: string | null;
+  /** De login (Cloudflare Access) is verlopen: niets meer ophalen tot de founder herlaadt. */
+  verlopen: boolean;
   /** Wat een agent nu live doet (uit het Claude Code-activiteitslog). */
   live: Record<string, LiveWork>;
   /** Welke mensen nu in het HQ zijn. */
   online: string[];
 }
 
-let state: HqState = { bron: 'laden', bijgewerkt: null, taken: [], live: {}, online: [] };
+let state: HqState = { bron: 'laden', bijgewerkt: null, taken: [], verouderd: false, sinds: null, verlopen: false, live: {}, online: [] };
 const subs = new Set<() => void>();
 export const hqStore = {
   get: () => state,
@@ -187,22 +196,137 @@ export function progress(list: HqTaak[]) {
   return { done, busy, open, total: list.length, pct: list.length ? Math.round((done / list.length) * 100) : 0 };
 }
 
+// --- Hoe betrouwbaar zijn de taken? ---
+
+const vandaag = (d: Date) => d.toDateString() === new Date().toDateString();
+/** "14:05", of "3/11 14:05" als het niet van vandaag is. */
+function uur(iso: string | null) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  const hm = d.toLocaleTimeString('nl-BE', { hour: '2-digit', minute: '2-digit' });
+  return vandaag(d) ? hm : `${d.getDate()}/${d.getMonth() + 1} ${hm}`;
+}
+
+/**
+ * Mogen we de taken geloven? Alleen dan zegt het HQ "niets open" of "alles is bij".
+ * Anders een korte tekst voor de bronchip en de schermen (Notion plat, verouderd, login verlopen).
+ */
+export function takenStand(s: HqState): { ok: boolean; tekst: string } {
+  if (s.verlopen) return { ok: false, tekst: 'Login verlopen' };
+  if (s.bron === 'laden') return { ok: false, tekst: 'Taken laden…' };
+  if (s.verouderd) return { ok: false, tekst: `Verouderd sinds ${uur(s.sinds ?? s.bijgewerkt)}` };
+  if (s.bron === 'geen' || s.fout)
+    return { ok: false, tekst: s.taken.length && s.bijgewerkt ? `Notion is niet bereikbaar · stand van ${uur(s.bijgewerkt)}` : 'Notion is niet bereikbaar' };
+  return { ok: true, tekst: `${s.bron === 'notion' ? 'Live uit Notion' : 'Notion-momentopname'} · ${uur(s.bijgewerkt)}` };
+}
+
+/** Zelfde als takenStand, als hook (twee losse waarden, zodat React niet bij elke render opnieuw tekent). */
+export function useTakenStand() {
+  const ok = useHq((s) => takenStand(s).ok);
+  const tekst = useHq((s) => takenStand(s).tekst);
+  return { ok, tekst };
+}
+
+// --- Login (Cloudflare Access) ---
+
+/**
+ * Zegt dit antwoord "niet (meer) ingelogd"? Een redirect naar de login van Access (met redirect: 'manual'),
+ * een 401/403 van de Worker of van Access, of een pagina in plaats van JSON.
+ */
+export function loginVerlopen(r: Response) {
+  if (r.type === 'opaqueredirect' || r.status === 401 || r.status === 403) return true;
+  return r.ok && !(r.headers.get('content-type') ?? '').includes('json');
+}
+
+let pollTimer: ReturnType<typeof setTimeout> | undefined;
+
+/** Login verlopen: de balk tonen en stoppen met ophalen (call.ts stopt dan ook met opnieuw verbinden). */
+export function meldVerlopen() {
+  clearTimeout(pollTimer);
+  if (!state.verlopen) hqStore.set({ verlopen: true });
+}
+
+// --- Taken ophalen ---
+
+const BRONNEN: Bron[] = ['notion', 'momentopname', 'geen'];
+const isStr = (x: unknown): x is string => typeof x === 'string';
+
+/** Een taak zoals de Worker of de dev-server ze stuurt; wat niet klopt, valt weg. */
+function leesTaak(x: unknown): HqTaak | null {
+  if (!x || typeof x !== 'object') return null;
+  const t = x as Record<string, unknown>;
+  if (!isStr(t.id) || !isStr(t.naam)) return null;
+  const s = (k: string) => (isStr(t[k]) ? (t[k] as string) : '');
+  const url = s('url');
+  return {
+    id: t.id,
+    naam: t.naam,
+    status: s('status') || 'Niet gestart',
+    uitvoerder: s('uitvoerder'),
+    afdeling: s('afdeling'),
+    prioriteit: s('prioriteit'),
+    bron: s('bron'),
+    voorstel: t.voorstel === true,
+    vervaldatum: isStr(t.vervaldatum) ? t.vervaldatum : null,
+    aangemaakt: s('aangemaakt'),
+    bewerkt: s('bewerkt'),
+    // Enkel gewone https-links (Notion), nooit iets anders in een href.
+    url: /^https:\/\//.test(url) ? url : '',
+  };
+}
+
+const POLL_MS = 60_000;
 let started = false;
-/** Taken elke minuut verversen en de live-activiteit volgen. */
+/** Taken elke minuut verversen (niet als het tabblad verborgen is) en de live-activiteit volgen. */
 export function startHqData() {
   if (started) return;
   started = true;
+  let bezig = false;
+  let laatste = 0;
+  /** Het vorige antwoord: is het hetzelfde, dan hoeft er niets opnieuw getekend te worden. */
+  let vorigRuw: string | null = null;
+
   const load = async () => {
+    if (bezig || state.verlopen) return;
+    bezig = true;
+    laatste = Date.now();
     try {
-      const r = await fetch('/hq/taken');
-      const d = await r.json();
-      hqStore.set({ bron: d.bron, bijgewerkt: d.bijgewerkt, taken: d.taken ?? [], fout: d.fout });
+      const r = await fetch('/hq/taken', { redirect: 'manual', cache: 'no-store', headers: { Accept: 'application/json' } });
+      if (loginVerlopen(r)) return meldVerlopen();
+      if (!r.ok) throw new Error(String(r.status));
+      const ruw = await r.text();
+      if (ruw === vorigRuw) return;
+      const d = JSON.parse(ruw) as Record<string, unknown>;
+      const bron = BRONNEN.find((b) => b === d.bron) ?? 'geen';
+      const fout = isStr(d.fout) ? d.fout.slice(0, 200) : undefined;
+      if (bron === 'geen') {
+        // Niets bruikbaars ontvangen: de laatst goede taken blijven in beeld, enkel de fout erbij.
+        hqStore.set({ bron, fout: fout ?? 'Geen taken ontvangen.', verouderd: false, sinds: null });
+      } else {
+        const taken = Array.isArray(d.taken) ? d.taken.map(leesTaak).filter((t): t is HqTaak => !!t) : [];
+        hqStore.set({ bron, bijgewerkt: isStr(d.bijgewerkt) ? d.bijgewerkt : null, taken, fout, verouderd: d.verouderd === true, sinds: isStr(d.sinds) ? d.sinds : null });
+      }
+      vorigRuw = ruw;
     } catch {
-      hqStore.set({ bron: 'geen', fout: 'Dev-server niet bereikbaar.' });
+      vorigRuw = null;
+      hqStore.set((s) => ({ bron: s.bron === 'laden' ? 'geen' : s.bron, fout: import.meta.env.PROD ? 'HQ niet bereikbaar.' : 'Dev-server niet bereikbaar.' }));
+    } finally {
+      bezig = false;
     }
   };
-  void load();
-  setInterval(load, 60_000);
+  const plan = () => {
+    clearTimeout(pollTimer);
+    if (state.verlopen || document.hidden) return;
+    pollTimer = setTimeout(() => void load().then(plan), POLL_MS);
+  };
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) return clearTimeout(pollTimer);
+    // Terug in het tabblad: meteen verversen (tenzij net gebeurd).
+    if (Date.now() - laatste > 15_000) void load().then(plan);
+    else plan();
+  });
+  void load().then(plan);
 
   // Zelfde stroom als het organigram (main.tsx opent ze al): geen extra verbinding.
   onActivity((e) => {
