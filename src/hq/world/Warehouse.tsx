@@ -16,7 +16,7 @@ import { useCall } from '../call';
 import { Character, MOOD_COLOR, type Mood } from './Character';
 import { Booth, Chair, CoffeeTable, Desk, MeetingTable, Plant, Planter, Rug, Shelf, Sofa } from './Furniture';
 import { Gaming, PingPong, PoolTable } from './Lounge';
-import { ArenaCourt, BrandWall, FloorLogo, Fitness, Kitchen, KitchenLounge, MezzLed, Studio } from './Extras';
+import { ArenaCourt, BrandWall, FacadeLogos, FloorLogo, Fitness, Kitchen, KitchenLounge, MezzLed, Studio } from './Extras';
 import { TaskBoard } from './TaskBoard';
 import { B, ROOM_H, glassMat, steelMat } from './dims';
 import { CUT, CutContext, useCut, type Cut } from './cut';
@@ -1253,6 +1253,7 @@ export function Warehouse() {
     <CutContext.Provider value={cut}>
     <group position={[0, 0, B.Z]}>
       <Shell />
+      <FacadeLogos />
       {cut === 'geen' && <Ceiling />}
       <mesh rotation-x={-Math.PI / 2} position-y={0.02} receiveShadow>
         <planeGeometry args={[W, D]} />

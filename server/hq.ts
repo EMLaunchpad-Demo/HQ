@@ -49,6 +49,7 @@ interface Verbinding {
   wie: string;
   sid: string;
   sinds: number;
+  vorige: string | null;
   belt: string | null;
   gesprek: { wie: string; sid: string } | null;
 }
@@ -59,6 +60,8 @@ interface Uitgaand {
 interface Gevolg {
   leveringen: { sid: string; bericht: Uitgaand }[];
   wijzigingen: (Partial<Verbinding> & { sid: string })[];
+  /** Enkel bij bijVerbinden: oude verbindingen van hetzelfde tabblad die dicht moeten. */
+  sluiten?: string[];
 }
 interface Bericht {
   naar: string;
@@ -66,12 +69,19 @@ interface Bericht {
   naarSid: string | null;
   data: unknown;
 }
+/** Na een herverbinding: de vorige verbinding van het tabblad en het gesprek waarin het volgens de browser zit. */
+interface Hervat {
+  vorige: string | null;
+  peer: string | null;
+  peerSid: string | null;
+}
 interface KantoorLogica {
   SLUIT_TE_VEEL: number;
-  nieuweVerbinding(wie: string, sid: string): Verbinding;
+  nieuweVerbinding(wie: string, sid: string, sinds?: number, vorige?: string | null): Verbinding;
   valideerBericht(raw: string, van: string, bekend: Set<string>): Bericht | null;
   routeer(lijst: Verbinding[], vanSid: string, b: Bericht): Gevolg;
   bijSluiten(anderen: Verbinding[], dicht: Verbinding): Gevolg;
+  bijVerbinden(lijst: Verbinding[], sid: string, opties: Hervat): Gevolg;
   teSluiten(lijst: Verbinding[], wie: string): string[];
   aanwezig(lijst: Verbinding[]): string[];
 }
@@ -412,16 +422,31 @@ export function createHq(root: string, notionToken?: string) {
     for (const x of kamer.values()) x.kanaal.stuur(b);
   }
 
-  function verbind(L: KantoorLogica, wie: string, kanaal: Kanaal): string {
+  /** Herverbinding uit het adres (?vorige=&peer=&peerSid=); de regels zelf kijken alles na. */
+  function hervatUit(q: URLSearchParams): Hervat {
+    const peer = q.get('peer');
+    return { vorige: q.get('vorige'), peer: peer && bekend.has(peer) ? peer : null, peerSid: q.get('peerSid') };
+  }
+
+  function verbind(L: KantoorLogica, wie: string, kanaal: Kanaal, hervat: Hervat): string {
+    const sid = randomUUID();
+    kamer.set(sid, { v: L.nieuweVerbinding(wie, sid, Date.now(), hervat.vorige), kanaal });
+    // "welkom" (met de sid), en na een herverbinding de oproep of het gesprek van dit tabblad terug.
+    const g = L.bijVerbinden(lijst(), sid, hervat);
+    voerUit(g);
+    for (const oud of g.sluiten ?? []) {
+      const x = kamer.get(oud);
+      if (!x) continue;
+      kamer.delete(oud); // zijn oproep en gesprek staan nu bij de nieuwe verbinding
+      x.kanaal.sluit(1000, 'Vervangen door een nieuwe verbinding.');
+    }
     // Hoogstens 3 tabbladen per persoon: het oudste gaat dicht (code 4000).
-    for (const oud of L.teSluiten(lijst(), wie)) {
+    for (const oud of L.teSluiten(lijst().filter((v) => v.sid !== sid), wie)) {
       const x = kamer.get(oud);
       if (!x) continue;
       weg(L, oud);
       x.kanaal.sluit(L.SLUIT_TE_VEEL, 'Te veel tabbladen open.');
     }
-    const sid = randomUUID();
-    kamer.set(sid, { v: L.nieuweVerbinding(wie, sid), kanaal });
     broadcast(L);
     return sid;
   }
@@ -455,7 +480,8 @@ export function createHq(root: string, notionToken?: string) {
       .update(key + WS_GUID)
       .digest('base64');
     socket.write(`HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${accept}\r\n\r\n`);
-    const wie = kiesWie(new URL(req.url ?? '/', 'http://x').searchParams, req.headers.referer);
+    const q = new URL(req.url ?? '/', 'http://x').searchParams;
+    const wie = kiesWie(q, req.headers.referer);
     let sid = '';
     const ws = new DevSocket(
       socket,
@@ -465,7 +491,7 @@ export function createHq(root: string, notionToken?: string) {
       },
       () => weg(L, sid),
     );
-    sid = verbind(L, wie, { stuur: (b) => ws.stuur(JSON.stringify(b)), sluit: (code, reden) => ws.sluit(code, reden) });
+    sid = verbind(L, wie, { stuur: (b) => ws.stuur(JSON.stringify(b)), sluit: (code, reden) => ws.sluit(code, reden) }, hervatUit(q));
     if (head?.length) ws.lees(head);
   }
 
@@ -499,8 +525,8 @@ export function createHq(root: string, notionToken?: string) {
         },
       };
       const wie = kiesWie(url.searchParams, req.headers.referer);
-      const sid = verbind(L, wie, kanaal);
-      kanaal.stuur({ event: 'welkom', data: { wie, sid } });
+      // verbind stuurt zelf "welkom" { wie, sid, belt, oproepen }: de sid gaat mee in elke POST (vanSid).
+      const sid = verbind(L, wie, kanaal, hervatUit(url.searchParams));
       const ping = setInterval(() => open() && res.write(': ping\n\n'), 20_000);
       req.on('close', () => {
         clearInterval(ping);

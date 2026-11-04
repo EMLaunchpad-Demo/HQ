@@ -233,6 +233,7 @@ export function useTakenStand() {
 /**
  * Zegt dit antwoord "niet (meer) ingelogd"? Een redirect naar de login van Access (met redirect: 'manual'),
  * een 401/403 van de Worker of van Access, of een pagina in plaats van JSON.
+ * Een 503 van de Worker ({"fout":"login-controle"}) is geen verlopen login: de controle lukte even niet, opnieuw proberen.
  */
 export function loginVerlopen(r: Response) {
   if (r.type === 'opaqueredirect' || r.status === 401 || r.status === 403) return true;
@@ -292,7 +293,8 @@ export function startHqData() {
     bezig = true;
     laatste = Date.now();
     try {
-      const r = await fetch('/hq/taken', { redirect: 'manual', cache: 'no-store', headers: { Accept: 'application/json' } });
+      // Met een tijdslimiet: een verzoek dat blijft hangen (slaapstand, wifi-wissel) mag de polling niet stilleggen.
+      const r = await fetch('/hq/taken', { redirect: 'manual', cache: 'no-store', headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(10_000) });
       if (loginVerlopen(r)) return meldVerlopen();
       if (!r.ok) throw new Error(String(r.status));
       const ruw = await r.text();

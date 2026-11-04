@@ -1,6 +1,6 @@
 // Merk en extra ruimtes in het HQ: neon in de huisstijl, de pingpong-arena, content studio met podcast,
 // de grote keuken met lounge, en de fitness boven. Coördinaten zijn lokaal in de hal (midden = 0, voorgevel = +z).
-import { useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import * as THREE from 'three';
 import { RoundedBox, Text } from '@react-three/drei';
 import { FONT, FONT_MONO } from '../fonts';
@@ -9,6 +9,7 @@ import { Chair, Plant, Rug, Shelf, Sofa } from './Furniture';
 import { B, ROOM_H, steelMat } from './dims';
 import { CUT, useCut } from './cut';
 import { GlassFront } from './parts';
+import logoUrl from '../assets/em-logo-gevel.png';
 
 const { W, D, MZ, MD } = B;
 const IX = W / 2 - MD;
@@ -112,6 +113,92 @@ export function FloorLogo() {
         <planeGeometry args={[6.4, 0.06]} />
         <meshBasicMaterial map={brandGradientTex()} toneMapped={false} />
       </mesh>
+    </group>
+  );
+}
+
+// --- Logo op de gevel ---
+
+const LOGO_BG = '#171b25';
+const LOGO_RATIO = 296 / 428;
+let logoTex: THREE.CanvasTexture | null = null;
+let logoWait: Promise<THREE.CanvasTexture> | null = null;
+
+/** Het logo als textuur; de randen lopen over in de kleur van het bord, zodat er geen kader van de foto zichtbaar is. */
+function loadLogo() {
+  logoWait ??= new Promise((done) => {
+    const img = new Image();
+    img.onload = () => {
+      const w = 1024;
+      const h = Math.round(w * LOGO_RATIO);
+      const c = document.createElement('canvas');
+      c.width = w;
+      c.height = h;
+      const g = c.getContext('2d')!;
+      g.fillStyle = LOGO_BG;
+      g.fillRect(0, 0, w, h);
+      g.drawImage(img, 0, 0, w, h);
+      const edge = (x0: number, y0: number, x1: number, y1: number) => {
+        const grd = g.createLinearGradient(x0, y0, x1, y1);
+        grd.addColorStop(0, LOGO_BG);
+        grd.addColorStop(1, 'rgba(23,27,37,0)');
+        g.fillStyle = grd;
+        g.fillRect(0, 0, w, h);
+      };
+      const m = w * 0.05;
+      edge(0, 0, m, 0);
+      edge(w, 0, w - m, 0);
+      edge(0, 0, 0, m);
+      edge(0, h, 0, h - m);
+      const t = new THREE.CanvasTexture(c);
+      t.colorSpace = THREE.SRGBColorSpace;
+      t.anisotropy = 8;
+      logoTex = t;
+      done(t);
+    };
+    img.src = logoUrl;
+  });
+  return logoWait;
+}
+
+function useLogo() {
+  const [tex, setTex] = useState(logoTex);
+  useEffect(() => {
+    if (!tex) void loadLogo().then(setTex);
+  }, [tex]);
+  return tex;
+}
+
+/** Verlicht lichtbakbord met het logo: zwart stalen kader, het logo zelflichtend, een gloed op de muur erachter. */
+export function LogoSign({ w, ...g }: { w: number } & JSX.IntrinsicElements['group']) {
+  const tex = useLogo();
+  const h = w * LOGO_RATIO;
+  return (
+    <group {...g}>
+      <mesh position-z={-0.02}>
+        <planeGeometry args={[w * 1.5, h * 1.6]} />
+        <meshBasicMaterial map={glowTex()} color={BRAND.cyan} transparent opacity={0.35} blending={THREE.AdditiveBlending} depthWrite={false} toneMapped={false} />
+      </mesh>
+      <mesh position-z={0.08} material={steelMat} castShadow>
+        <boxGeometry args={[w + 0.24, h + 0.24, 0.16]} />
+      </mesh>
+      <mesh position-z={0.165}>
+        <planeGeometry args={[w, h]} />
+        {tex ? <meshBasicMaterial map={tex} toneMapped={false} /> : <meshBasicMaterial color={LOGO_BG} />}
+      </mesh>
+      <NeonBar len={w + 0.24} thick={0.03} position={[0, -h / 2 - 0.16, 0.12]} />
+    </group>
+  );
+}
+
+/** Het logo buiten: groot op de zijgevel naar de parking, op de cederhouten kop van de voorgevel en naast de naam op de daklijst. */
+export function FacadeLogos() {
+  if (useCut() !== 'geen') return null;
+  return (
+    <group>
+      <LogoSign w={6} position={[W / 2 + 0.5, 3.05, 0]} rotation-y={Math.PI / 2} />
+      <LogoSign w={2.9} position={[W / 2 - 1.6, 6.3, D / 2 + 0.37]} />
+      <LogoSign w={0.62} position={[-3.3, B.H - 0.33, D / 2 + 0.16]} />
     </group>
   );
 }

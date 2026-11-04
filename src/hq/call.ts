@@ -130,8 +130,14 @@ function alsIce(x: unknown): RTCIceCandidateInit | null {
   return { candidate: x.candidate, sdpMid: mid, sdpMLineIndex: index, usernameFragment: frag };
 }
 
+const SID_RE = /^[A-Za-z0-9-]{8,64}$/;
+
 let es: EventSource | null = null;
-/** Lokaal: het sessie-id van dit tabblad (event "welkom" van de dev-server), zodat een POST van het juiste tabblad komt. */
+/**
+ * De sid van de laatste verbinding van dit tabblad (event "welkom" van het kantoor of de dev-server).
+ * Lokaal gaat ze mee in elke POST (vanSid); bij een herverbinding gaat ze mee als ?vorige=, zodat het kantoor het
+ * lopende gesprek aan de nieuwe verbinding koppelt. Blijft daarom staan als de verbinding wegvalt.
+ */
 let mijnSid: string | null = null;
 let ws: WebSocket | null = null;
 let wsRetry: ReturnType<typeof setTimeout> | undefined;
@@ -144,7 +150,16 @@ let laatstGehoord = 0;
 
 let pc: RTCPeerConnection | null = null;
 let pendingIce: RTCIceCandidateInit[] = [];
-/** Online: het tabblad van de ander in dit gesprek. Andere tabbladen van die persoon mogen het gesprek niet storen. */
+/** Een aanbod dat binnenkwam terwijl camera en microfoon nog gevraagd werden (na "aanvaard", zie accept). */
+let wachtendAanbod: RTCSessionDescriptionInit | null = null;
+/** Belde ik (dan maak ik de aanbiedingen), of nam ik op? */
+let ikBel = false;
+/** Wanneer de beller het laatst een ICE-herstart begon (zodat ICE de tijd krijgt om terug te komen). */
+let laatsteHerstart = 0;
+/**
+ * Het tabblad (de verbinding) van de ander in dit gesprek. Andere tabbladen van die persoon mogen het gesprek niet
+ * storen. Verbindt de ander opnieuw, dan meldt het kantoor de nieuwe sid met "verhuisd".
+ */
 let peerSid: string | null = null;
 /**
  * Telt op bij elk nieuw gesprek en bij elk ophangen. Komt een camera of een antwoord binnen voor een gesprek
@@ -154,7 +169,7 @@ let gesprek = 0;
 let ice: Promise<RTCIceServer[]> | null = null;
 let ringTimer: ReturnType<typeof setTimeout> | undefined;
 let verbindTimer: ReturnType<typeof setTimeout> | undefined;
-let iceTimer: ReturnType<typeof setTimeout> | undefined;
+let iceTimer: ReturnType<typeof setInterval> | undefined;
 
 async function post(naar: string, soort: Soort, data: unknown = null, naarSid: string | null = peerSid) {
   if (ONLINE) {
@@ -180,7 +195,8 @@ async function post(naar: string, soort: Soort, data: unknown = null, naarSid: s
 /** Online: wie ben je volgens de login? 'verlopen' = niet (meer) ingelogd, 'fout' = even geen verbinding. */
 async function vraagIk(): Promise<string | 'verlopen' | 'fout'> {
   try {
-    const r = await fetch(`/hq/ik${IK_QUERY}`, { redirect: 'manual', cache: 'no-store', headers: { Accept: 'application/json' } });
+    // Met een tijdslimiet: een verzoek dat blijft hangen (na slaapstand) mag het herverbinden niet blokkeren.
+    const r = await fetch(`/hq/ik${IK_QUERY}`, { redirect: 'manual', cache: 'no-store', headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(10_000) });
     if (loginVerlopen(r)) return 'verlopen';
     if (!r.ok) return 'fout';
     const d: unknown = await r.json();
@@ -200,6 +216,7 @@ export function setMe(id: string) {
   }
   hangup(false);
   set({ me: id });
+  mijnSid = null; // iemand anders: geen herverbinding van het vorige tabblad
   connectPresence();
 }
 
@@ -235,7 +252,6 @@ function opnieuwNu() {
 function sluitVerbinding() {
   es?.close();
   es = null;
-  mijnSid = null;
   clearTimeout(wsRetry);
   clearInterval(wsPing);
   wachtOpnieuw = false;
@@ -253,16 +269,35 @@ function sluitVerbinding() {
   }
 }
 
+/**
+ * Het adres van /hq/signaal. Na een herverbinding met de vorige sid van dit tabblad, en in een gesprek ook met wie
+ * en met welk tabblad: zo koppelt het kantoor het gesprek terug (bijVerbinden in kantoor-logica.js).
+ */
+function signaalAdres(): string {
+  const q = new URLSearchParams();
+  if (!ONLINE && state.me) q.set('wie', state.me);
+  if (IK_QUERY && urlIk) q.set('ik', urlIk);
+  if (mijnSid) {
+    q.set('vorige', mijnSid);
+    if ((state.status === 'verbinden' || state.status === 'verbonden') && state.peer && peerSid) {
+      q.set('peer', state.peer);
+      q.set('peerSid', peerSid);
+    }
+  }
+  const s = q.toString();
+  return `/hq/signaal${s ? `?${s}` : ''}`;
+}
+
 function connectPresence() {
   sluitVerbinding();
   if (!state.me || hqStore.get().verlopen) return;
   if (ONLINE) return openSocket();
-  const source = new EventSource(`/hq/signaal?wie=${encodeURIComponent(state.me)}`);
+  const source = new EventSource(signaalAdres());
   es = source;
   source.addEventListener('welkom', (m) => {
-    const w = leesJson((m as MessageEvent).data);
-    if (es === source && isObj(w) && typeof w.sid === 'string' && /^[A-Za-z0-9-]{8,64}$/.test(w.sid)) mijnSid = w.sid;
+    if (es === source) opWelkom(leesJson((m as MessageEvent).data));
   });
+  source.addEventListener('verhuisd', (m) => opVerhuisd(leesJson((m as MessageEvent).data)));
   source.addEventListener('aanwezig', (m) => zetAanwezig(leesJson((m as MessageEvent).data)));
   source.addEventListener('bericht', (m) => {
     const b = leesBericht(leesJson((m as MessageEvent).data));
@@ -271,7 +306,7 @@ function connectPresence() {
 }
 
 function openSocket() {
-  const sock = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/hq/signaal${IK_QUERY}`);
+  const sock = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}${signaalAdres()}`);
   ws = sock;
   let geopend = 0;
   /** Verbinding opgeven en opnieuw beginnen (zonder op de browser te wachten). */
@@ -308,8 +343,9 @@ function openSocket() {
     // 4000: het kantoor sloot dit tabblad, omdat het HQ in te veel tabbladen open staat. Niet opnieuw verbinden.
     if (e.code === 4000) return note('Het HQ staat in te veel tabbladen open. Dit tabblad is losgekoppeld: herlaad het om opnieuw te verbinden.', 20_000);
     if (geopend && Date.now() - geopend > 10_000) pogingen = 0;
-    // Lukt het verbinden herhaald niet, kijk dan of de login verlopen is (een WebSocket toont de 401 zelf niet).
-    if (!geopend && pogingen >= 1) {
+    // 4001: de login van deze verbinding is verlopen. Lukt het verbinden herhaald niet, kijk dan ook of de login
+    // verlopen is (een WebSocket toont de 401 zelf niet).
+    if (e.code === 4001 || (!geopend && pogingen >= 1)) {
       void vraagIk().then((ik) => (ik === 'verlopen' ? meldVerlopen() : planOpnieuw()));
       return;
     }
@@ -326,13 +362,44 @@ function wakker() {
 window.addEventListener('online', wakker);
 document.addEventListener('visibilitychange', wakker);
 
+/**
+ * Het kantoor kent dit tabblad nu onder `sid`. Na een herverbinding vertelt het ook of de oproep nog loopt:
+ * `belt` = wie dit tabblad nog belt, `oproepen` = wie mij nog belt. Wat niet meer loopt, stopt hier ook.
+ */
+function opWelkom(x: unknown) {
+  if (!isObj(x) || typeof x.sid !== 'string' || !SID_RE.test(x.sid)) return;
+  mijnSid = x.sid;
+  const oproepen = Array.isArray(x.oproepen) ? x.oproepen.filter(isId) : [];
+  const belt = isId(x.belt) ? x.belt : null;
+  if (state.status === 'inkomend' && state.peer && !oproepen.includes(state.peer)) {
+    const wie = nameOf(state.peer);
+    cleanup();
+    note(`Gemiste oproep van ${wie}.`);
+  } else if (state.status === 'uitgaand' && belt !== state.peer) {
+    cleanup();
+    note('De verbinding met het HQ was even weg. Bel opnieuw.');
+  } else if (state.status === 'verbinden' || state.status === 'verbonden') herstelNu();
+}
+
+/** Het tabblad van de ander is opnieuw verbonden (nieuwe sid): voortaan naar die verbinding sturen. */
+function opVerhuisd(x: unknown) {
+  if (!isObj(x) || !state.peer || x.wie !== state.peer || x.oud !== peerSid || typeof x.nieuw !== 'string' || !SID_RE.test(x.nieuw)) return;
+  peerSid = x.nieuw;
+  herstelNu();
+}
+
 function onSocketBericht(x: unknown) {
   if (!isObj(x)) return;
   if (x.event === 'aanwezig') return zetAanwezig(x.data);
+  if (x.event === 'welkom') return opWelkom(x.data);
+  if (x.event === 'verhuisd') return opVerhuisd(x.data);
   if (x.event === 'niet-online') {
-    const naar = isObj(x.data) && typeof x.data.naar === 'string' ? x.data.naar : null;
+    const d = isObj(x.data) ? x.data : {};
+    const naar = typeof d.naar === 'string' ? d.naar : null;
     if (!naar || naar !== state.peer) return;
-    if (state.status === 'uitgaand' || state.status === 'verbinden') {
+    // Enkel als de oproep zelf niet aankwam. Een aanbod of ICE-berichtje terwijl de ander even herverbindt, gaat
+    // opnieuw na "verhuisd"; is de ander echt weg, dan stopt zetAanwezig het gesprek.
+    if ((state.status === 'uitgaand' || state.status === 'verbinden') && (d.soort === 'bellen' || d.soort === 'aanvaard')) {
       cleanup();
       note(`${nameOf(naar)} is nu niet in het HQ.`);
     }
@@ -516,11 +583,12 @@ function makePeer(peer: string, local: MediaStream, servers: RTCIceServer[], bel
   };
   conn.oniceconnectionstatechange = () => {
     if (pc !== conn) return;
-    clearTimeout(iceTimer);
+    clearInterval(iceTimer);
     const st = conn.iceConnectionState;
     if (st === 'failed') return mislukt();
-    // Even weg (wifi-wissel): 5 s wachten, dan de ICE-verbinding opnieuw opbouwen.
-    if (st === 'disconnected') iceTimer = setTimeout(() => void herstelIce(conn, peer, beller), 5000);
+    // Even weg (wifi-wissel): 5 s wachten, dan de ICE-verbinding opnieuw opbouwen. Dat herhalen zolang ze weg blijft:
+    // het aanbod kan verloren gaan als ook de verbinding met het kantoor even weg was.
+    if (st === 'disconnected') iceTimer = setInterval(() => void herstelIce(conn, peer, beller), 5000);
   };
   conn.onconnectionstatechange = () => {
     if (pc === conn && conn.connectionState === 'failed') mislukt();
@@ -529,12 +597,29 @@ function makePeer(peer: string, local: MediaStream, servers: RTCIceServer[], bel
   return conn;
 }
 
-/** ICE opnieuw opbouwen. Enkel de beller maakt een nieuw aanbod, zodat ze nooit tegelijk een aanbod sturen. */
+/** De weg naar de ander is terug (herverbonden, of de ander verhuisde): staat ICE nog op "disconnected", meteen herstellen. */
+function herstelNu() {
+  if (pc && state.peer && pc.iceConnectionState === 'disconnected') void herstelIce(pc, state.peer, ikBel);
+}
+
+/**
+ * ICE opnieuw opbouwen. Enkel de beller maakt een aanbod, zodat ze nooit tegelijk een aanbod sturen.
+ * Wacht er al een aanbod op antwoord (verloren omdat ook de verbinding met het kantoor weg was), dan gaat dat
+ * opnieuw: localDescription bevat ook de ICE-kandidaten die intussen gevonden zijn. Een nieuwe herstart pas na 15 s,
+ * zodat ICE de tijd krijgt om terug te komen.
+ */
 async function herstelIce(conn: RTCPeerConnection, peer: string, beller: boolean) {
   if (pc !== conn || conn.iceConnectionState !== 'disconnected') return;
-  conn.restartIce();
-  if (!beller || conn.signalingState !== 'stable') return;
+  if (!beller) return conn.restartIce();
   try {
+    const wacht = conn.localDescription;
+    if (conn.signalingState === 'have-local-offer' && wacht?.type === 'offer') {
+      await post(peer, 'aanbod', { type: 'offer', sdp: wacht.sdp });
+      return;
+    }
+    if (conn.signalingState !== 'stable' || Date.now() - laatsteHerstart < 15_000) return;
+    laatsteHerstart = Date.now();
+    conn.restartIce();
     const offer = await conn.createOffer({ iceRestart: true });
     if (pc !== conn) return;
     await conn.setLocalDescription(offer);
@@ -555,7 +640,10 @@ function cleanup() {
   gesprek++;
   clearTimeout(ringTimer);
   clearTimeout(verbindTimer);
-  clearTimeout(iceTimer);
+  clearInterval(iceTimer);
+  wachtendAanbod = null;
+  ikBel = false;
+  laatsteHerstart = 0;
   if (pc) {
     pc.onicecandidate = null;
     pc.ontrack = null;
@@ -587,6 +675,7 @@ export async function call(peer: string) {
   if (!state.me || state.status !== 'idle' || peer === state.me) return;
   const nr = ++gesprek;
   peerSid = null;
+  ikBel = true;
   set({ status: 'uitgaand', peer });
   void iceServers();
   // Naar alle tabbladen van de ander: wie het eerst opneemt, krijgt het gesprek.
@@ -612,10 +701,34 @@ export async function accept() {
   clearTimeout(ringTimer);
   set({ status: 'verbinden' });
   startVerbindTimer(nr);
+  // Meteen "aanvaard", nog voor camera en microfoon: zo stopt de beller met wachten en stoppen de andere tabbladen
+  // meteen met rinkelen, ook als de vraag om toestemming even openstaat (review R2). Een aanbod dat intussen
+  // binnenkomt, wacht in wachtendAanbod.
+  if (!(await post(peer, 'aanvaard'))) {
+    if (nr === gesprek) mislukt();
+    return;
+  }
   const m = await mediaVoor(nr);
   if (!m) return;
-  makePeer(peer, m.local, m.servers, false);
-  if (!(await post(peer, 'aanvaard')) && nr === gesprek) mislukt();
+  const conn = makePeer(peer, m.local, m.servers, false);
+  const aanbod = wachtendAanbod;
+  wachtendAanbod = null;
+  if (aanbod) await beantwoord(conn, peer, aanbod);
+}
+
+/** Het aanbod van de beller beantwoorden (ook een nieuw aanbod voor een ICE-herstart). */
+async function beantwoord(conn: RTCPeerConnection, peer: string, sdp: RTCSessionDescriptionInit) {
+  try {
+    await conn.setRemoteDescription(sdp);
+    await flushIce(conn);
+    const answer = await conn.createAnswer();
+    if (pc !== conn) return;
+    await conn.setLocalDescription(answer);
+    if (pc !== conn) return;
+    await post(peer, 'antwoord', answer);
+  } catch {
+    /* ongeldig of te laat: negeren */
+  }
 }
 
 export function decline() {
@@ -666,6 +779,7 @@ async function onMessage(m: Bericht) {
       if (state.status !== 'idle') return void post(van, 'bezet', null, vanSid);
       const nr = ++gesprek;
       peerSid = vanSid;
+      ikBel = false;
       set({ status: 'inkomend', peer: van });
       void iceServers();
       // Hangt de beller nooit op (tabblad dicht), dan blijft het hier niet eeuwig rinkelen.
@@ -677,9 +791,17 @@ async function onMessage(m: Bericht) {
       return;
     }
     case 'aanvaard': {
-      // Een tweede tabblad van de ander nam ook op: dat tabblad laten stoppen.
-      if (state.peer === van && peerSid && vanSid && vanSid !== peerSid) return void post(van, 'elders', null, vanSid);
-      if (state.status !== 'uitgaand' || state.peer !== van) return;
+      if (state.peer === van && peerSid && vanSid) {
+        // Een tweede tabblad van de ander nam ook op: dat tabblad laten stoppen.
+        if (vanSid !== peerSid) return void post(van, 'elders', null, vanSid);
+        if (state.status !== 'uitgaand') return; // hetzelfde "aanvaard" nog eens: niets te doen
+      }
+      if (state.status !== 'uitgaand' || state.peer !== van) {
+        // Een "aanvaard" voor een oproep die hier al voorbij is (bv. na een onderbreking): dat tabblad meteen laten
+        // stoppen, anders blijft het met de camera aan op "verbinden" staan (review R4).
+        if (vanSid) void post(van, 'ophangen', null, vanSid);
+        return;
+      }
       const nr = gesprek;
       peerSid = vanSid;
       clearTimeout(ringTimer);
@@ -700,21 +822,15 @@ async function onMessage(m: Bericht) {
       return;
     }
     case 'aanbod': {
-      if (!pc || state.peer !== van || anderTabblad) return;
+      if (state.peer !== van || anderTabblad || ikBel) return;
       const sdp = alsSdp(data, 'offer');
       if (!sdp) return;
-      const conn = pc;
-      try {
-        await conn.setRemoteDescription(sdp);
-        await flushIce(conn);
-        const answer = await conn.createAnswer();
-        if (pc !== conn) return;
-        await conn.setLocalDescription(answer);
-        if (pc !== conn) return;
-        await post(van, 'antwoord', answer);
-      } catch {
-        /* ongeldig of te laat: negeren */
+      // Nog geen verbinding: camera en microfoon worden nog gevraagd. accept() beantwoordt het daarna.
+      if (!pc) {
+        if (state.status === 'verbinden') wachtendAanbod = sdp;
+        return;
       }
+      await beantwoord(pc, van, sdp);
       return;
     }
     case 'antwoord': {

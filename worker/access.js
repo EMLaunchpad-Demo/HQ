@@ -3,6 +3,8 @@
 // CF_Authorization. We controleren de handtekening (RS256) met de publieke sleutels van ons Access-team, exp en nbf,
 // de uitgever (iss), de app (aud) en of het e-mailadres van een founder is. Geen extra pakketten: enkel WebCrypto,
 // dat zowel in Workers als in Node bestaat (zo test scripts/hq-worker-test.mjs dit met eigen sleutels).
+// Kan de Worker een token nu niet controleren (sleutels van Access onbereikbaar, instellingen kapot), dan is dat geen
+// verlopen login: controleerAccess zegt dan `tijdelijk`, en de Worker antwoordt 503 in plaats van 401 (review S2).
 //
 // Instellingen (gewone vars in wrangler.jsonc, geen geheimen):
 //   ACCESS_TEAM_DOMAIN  bv. weathered-boat-3ff0.cloudflareaccess.com
@@ -90,6 +92,7 @@ export function maakAccessControle({ haalCerts = standaardCerts, nu = () => Date
   async function vernieuw(c, domein) {
     if (!c.bezig) {
       c.poging = nu();
+      c.gelukt = false;
       c.bezig = (async () => {
         try {
           const data = await haalCerts(`https://${domein}/cdn-cgi/access/certs`);
@@ -112,6 +115,7 @@ export function maakAccessControle({ haalCerts = standaardCerts, nu = () => Date
           if (nieuw.size) {
             c.sleutels = nieuw;
             c.opgehaald = nu();
+            c.gelukt = true;
           } else console.error('HQ login: geen bruikbare sleutels bij Access.');
         } catch (e) {
           // Lukt het niet, dan blijven de vorige sleutels gelden; zonder sleutels komt niemand binnen.
@@ -124,24 +128,37 @@ export function maakAccessControle({ haalCerts = standaardCerts, nu = () => Date
     await c.bezig;
   }
 
+  /**
+   * De sleutel voor `kid`: { sleutel } of { sleutel: null, tijdelijk }. tijdelijk = we konden de lijst van Access nu
+   * niet nakijken (ophalen mislukt of nog nooit gelukt, of een nieuwe kid binnen de minuut na de vorige poging).
+   * Dan is het token niet ongeldig, enkel nog niet te controleren (bv. vlak nadat Access van sleutel wisselde).
+   */
   async function sleutelVoor(domein, kid) {
     let c = opslag.get(domein);
     if (!c) {
-      c = { sleutels: new Map(), opgehaald: 0, poging: -Infinity, bezig: null };
+      c = { sleutels: new Map(), opgehaald: 0, poging: -Infinity, bezig: null, gelukt: false };
       opslag.set(domein, c);
     }
     const oud = nu() - c.opgehaald > SLEUTELS_GELDIG_MS;
-    if ((!c.sleutels.has(kid) || oud) && (c.bezig || nu() - c.poging >= MIN_TUSSEN_OPHALEN_MS)) await vernieuw(c, domein);
-    return c.sleutels.get(kid) ?? null;
+    let nagekeken = false;
+    if ((!c.sleutels.has(kid) || oud) && (c.bezig || nu() - c.poging >= MIN_TUSSEN_OPHALEN_MS)) {
+      await vernieuw(c, domein);
+      nagekeken = c.gelukt;
+    }
+    const sleutel = c.sleutels.get(kid);
+    return sleutel ? { sleutel } : { sleutel: null, tijdelijk: !nagekeken };
   }
 
-  /** Controleert één token. Geeft { ok: true, email, wie } of { ok: false, reden } (de reden is voor de logs en tests). */
+  /**
+   * Controleert één token. Geeft { ok: true, email, wie, exp } of { ok: false, reden, tijdelijk } (de reden is voor
+   * de logs en tests). tijdelijk = niet te controleren door een storing of kapotte instellingen, niet door het token.
+   */
   async function controleerToken(token, env) {
-    const nee = (reden) => ({ ok: false, reden });
+    const nee = (reden, tijdelijk = false) => ({ ok: false, reden, tijdelijk });
     const domein = normaliseerDomein(env?.ACCESS_TEAM_DOMAIN);
     const aud = String(env?.ACCESS_AUD ?? '').trim();
     const founders = leesFounders(env);
-    if (!domein || !aud || !founders.size) return nee('instellingen ontbreken');
+    if (!domein || !aud || !founders.size) return nee('instellingen ontbreken', true);
     if (!token) return nee('geen token');
     const delen = token.split('.');
     if (delen.length !== 3) return nee('vorm');
@@ -156,8 +173,8 @@ export function maakAccessControle({ haalCerts = standaardCerts, nu = () => Date
     if (!kop || typeof kop !== 'object' || kop.alg !== 'RS256' || typeof kop.kid !== 'string') return nee('algoritme');
     if (!inhoud || typeof inhoud !== 'object' || Array.isArray(inhoud)) return nee('vorm');
 
-    const sleutel = await sleutelVoor(domein, kop.kid);
-    if (!sleutel) return nee('onbekende sleutel');
+    const { sleutel, tijdelijk } = await sleutelVoor(domein, kop.kid);
+    if (!sleutel) return nee('onbekende sleutel', tijdelijk);
     const echt = await crypto.subtle.verify('RSASSA-PKCS1-v1_5', sleutel, handtekening, new TextEncoder().encode(`${delen[0]}.${delen[1]}`));
     if (!echt) return nee('handtekening');
 
@@ -170,22 +187,33 @@ export function maakAccessControle({ haalCerts = standaardCerts, nu = () => Date
     const email = typeof inhoud.email === 'string' ? inhoud.email.trim().toLowerCase() : '';
     const wie = founders.get(email);
     if (!wie) return nee('onbekend e-mailadres');
-    return { ok: true, email, wie };
+    return { ok: true, email, wie, exp: inhoud.exp };
+  }
+
+  /**
+   * Zoals verifyAccess, maar met het verschil tussen "geen geldige login" en "nu niet te controleren":
+   * { ok: true, email, wie, exp } of { ok: false, tijdelijk }. Bij tijdelijk antwoordt de Worker 503 (opnieuw proberen),
+   * want opnieuw inloggen lost dan niets op.
+   */
+  async function controleerAccess(request, env) {
+    const r = await controleerToken(haalToken(request), env);
+    if (r.ok) return r;
+    if (r.tijdelijk) console.error('HQ login-controle nu niet mogelijk:', r.reden);
+    else if (r.reden !== 'geen token') console.error('HQ login geweigerd:', r.reden);
+    return { ok: false, tijdelijk: r.tijdelijk };
   }
 
   /** Het verzoek van een ingelogde founder? Geeft { email, wie } of null. */
   async function verifyAccess(request, env) {
-    const r = await controleerToken(haalToken(request), env);
-    if (!r.ok) {
-      if (r.reden !== 'geen token') console.error('HQ login geweigerd:', r.reden);
-      return null;
-    }
-    return { email: r.email, wie: r.wie };
+    const r = await controleerAccess(request, env);
+    return r.ok ? { email: r.email, wie: r.wie } : null;
   }
 
-  return { verifyAccess, controleerToken };
+  return { verifyAccess, controleerAccess, controleerToken };
 }
 
 const standaard = maakAccessControle();
 /** verifyAccess(request, env) → { email, wie } of null. */
 export const verifyAccess = standaard.verifyAccess;
+/** controleerAccess(request, env) → { ok: true, email, wie, exp } of { ok: false, tijdelijk }. */
+export const controleerAccess = standaard.controleerAccess;
