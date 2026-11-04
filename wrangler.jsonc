@@ -1,0 +1,24 @@
+{
+  // Fase 2 van het HQ: de app online, achter Cloudflare Access (login). Zie ../HQ.md.
+  // Nog NIET gedeployed: eerst akkoord van Ebert of Martijn, en een route kiezen.
+  "name": "em-launchpad-hq",
+  "main": "worker/worker.js",
+  "compatibility_date": "2026-10-01",
+  // Geen openbaar *.workers.dev-adres en geen preview-links: het HQ is enkel bereikbaar via het eigen
+  // adres, en daar staat Cloudflare Access (login) voor. Zet Access aan VOOR de eerste deploy met route.
+  "workers_dev": false,
+  "preview_urls": false,
+  // De gebouwde app (npm run build). De Worker beantwoordt /hq/* en /activity zelf.
+  "assets": {
+    "directory": "./dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/hq/*", "/activity"]
+  },
+  // Eén "kantoor" dat bijhoudt wie er in het HQ is en de call-berichtjes doorgeeft (WebSockets met hibernation: gratis plan).
+  "durable_objects": { "bindings": [{ "name": "KANTOOR", "class_name": "Kantoor" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Kantoor"] }],
+  // Adres gekozen door Ebert (3/11/2026). Cloudflare Access (login via Microsoft) moet hierop staan VOOR de eerste deploy.
+  "routes": [{ "pattern": "hq.emlaunchpad.com", "custom_domain": true }]
+  // Geheim (zet een founder zelf, nooit in dit bestand): npx wrangler secret put NOTION_TOKEN
+}

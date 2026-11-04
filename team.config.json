@@ -1,0 +1,80 @@
+{
+  "company": {
+    "name": "EM Launchpad",
+    "tagline": "Jij doet je vak. Je systeem doet de rest.",
+    "logo": "assets/em-logo.jpg"
+  },
+  "showDisclaimer": true,
+  "disclaimer": "AI-agents met een knipoog naar FC De Kampioenen. Geen samenwerking met of goedkeuring door de VRT, de makers of de acteurs.",
+  "memoryCount": 247,
+  "demo": {
+    "hook": "Wij hebben FC De Kampioenen in dienst genomen. Als AI.",
+    "cta": "Comment AI en ik toon je hoe",
+    "revealOrder": ["boma", "oscar", "carmen", "xavier", "ddt", "markske"]
+  },
+  "hq": {
+    "floors": [
+      { "id": "inkom", "label": "Inkom & War Room", "agents": ["boma"] },
+      { "id": "sales", "label": "Sales & Outreach", "departments": ["sales"] },
+      { "id": "marketing", "label": "Marketing & Content", "departments": ["marketing"] },
+      { "id": "bouw", "label": "AI & Automatisatie · Support", "departments": ["bouw", "support"] },
+      { "id": "strategie", "label": "Strategie & Financiën", "departments": ["strategie"] },
+      { "id": "lounge", "label": "Lounge, gaming & biljart", "lounge": true },
+      { "id": "directie", "label": "Directie", "offices": true }
+    ],
+    "people": [],
+    "officeStyles": { "ebert": "walnoot" }
+  },
+  "founders": [
+    { "id": "ebert", "name": "Ebert", "title": "Founder · Sales & groei" },
+    { "id": "martijn", "name": "Martijn", "title": "Founder · Service & delivery" }
+  ],
+  "chiefOfStaff": {
+    "id": "boma", "name": "Boma", "title": "Chief of Staff", "subtitle": "De voorzitter — runt alle departementen",
+    "tagline": "De voorzitter. Hij beslist.",
+    "color": "gradient", "avatarMode": "photo", "avatar": "avatars/boma.png", "avatarFocus": "50% 24%", "avatarZoom": 1.9,
+    "skills": ["Dagplanning", "Taken verdelen", "Weekreview", "Prioriteiten bewaken"]
+  },
+  "departments": [
+    {
+      "id": "sales", "label": "SALES", "founder": "ebert", "werkAgents": ["sales-lead-onderzoeker", "sales-crm-opvolger", "sales-contracten"],
+      "agent": {
+        "id": "oscar", "name": "Oscar", "title": "Sales & Outreach", "tagline": "Hangt altijd aan de telefoon.",
+        "color": "#2f7bff", "avatarMode": "photo", "avatar": "avatars/oscar.webp", "avatarFocus": "45% 30%", "avatarZoom": 1.9,
+        "skills": ["Leads zoeken", "Belscripts", "Offertes", "Follow-ups"]
+      }
+    },
+    {
+      "id": "marketing", "label": "MARKETING", "founder": "ebert", "werkAgents": ["content-strateeg", "content-video-editor", "content-publisher"],
+      "agent": {
+        "id": "carmen", "name": "Carmen", "title": "Marketing & Content", "tagline": "Altijd in beeld. Jouw merk ook.",
+        "color": "#2ff0a6", "avatarMode": "photo", "avatar": "avatars/carmen.png", "avatarFocus": "34% 17%", "avatarZoom": 2.2,
+        "skills": ["Contentscripts", "Trend scout", "Captions", "Contentkalender"]
+      }
+    },
+    {
+      "id": "strategie", "label": "STRATEGIE", "founder": "ebert", "werkAgents": ["content-analist", "service-onboarding"],
+      "agent": {
+        "id": "xavier", "name": "Xavier", "title": "Strategie & Financiën", "tagline": "Rekent alles tot op de cent.",
+        "color": "#13c7e6", "avatarMode": "photo", "avatar": "avatars/xavier.png", "avatarFocus": "46% 15%", "avatarZoom": 2.0,
+        "skills": ["Cijfers analyseren", "Facturatie", "Onboarding", "Strategie"]
+      }
+    },
+    {
+      "id": "bouw", "label": "AI & AUTOMATISATIE", "founder": "martijn", "werkAgents": ["service-platform-bouwer", "service-ai-consulting", "service-launchpad-os"],
+      "agent": {
+        "id": "ddt", "name": "DDT", "title": "Bouw & Automatisatie", "tagline": "Bouwt en repareert alles.",
+        "color": "#add78f", "avatarMode": "photo", "avatar": "avatars/ddt.png", "avatarFocus": "45% 30%", "avatarZoom": 1.7,
+        "skills": ["Websites", "Chatbots bouwen", "Voice agents", "Integraties"]
+      }
+    },
+    {
+      "id": "support", "label": "SUPPORT", "founder": "martijn", "werkAgents": ["service-support"],
+      "agent": {
+        "id": "markske", "name": "Markske", "title": "Support & Onderhoud", "tagline": "Houdt alles tegen. Ook bugs.",
+        "color": "#43b581", "avatarMode": "photo", "avatar": "avatars/markske.webp", "avatarFocus": "56% 20%", "avatarZoom": 2.4,
+        "skills": ["Klantvragen", "Monitoring", "Updates", "Bugfixes"]
+      }
+    }
+  ]
+}
