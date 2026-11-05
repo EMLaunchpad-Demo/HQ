@@ -12,27 +12,10 @@ export const GATE_Z = 36;
 
 const IRON = '#2d5a3d';
 
+// Het land, de velden en het dorp errond staan in Village.tsx; hier enkel het perceel.
 function Ground() {
-  const fields: [number, number, number, number, string][] = [
-    [-120, -120, 160, 110, '#7f9450'],
-    [60, -130, 170, 120, '#a39c62'],
-    [-150, 10, 90, 70, '#66823f'],
-    [110, 10, 120, 70, '#8a7457'],
-    [-110, 110, 150, 90, '#73894a'],
-    [100, 110, 140, 90, '#a9a06a'],
-  ];
   return (
     <group>
-      <mesh rotation-x={-Math.PI / 2} position={[0, -0.02, 0]} receiveShadow>
-        <planeGeometry args={[700, 700]} />
-        <meshStandardMaterial color="#70884a" roughness={1} />
-      </mesh>
-      {fields.map(([x, z, w, d, c], i) => (
-        <mesh key={i} rotation-x={-Math.PI / 2} position={[x, -0.01, z]}>
-          <planeGeometry args={[w, d]} />
-          <meshStandardMaterial color={c} roughness={1} />
-        </mesh>
-      ))}
       {/* Het perceel zelf: verzorgd gazon. */}
       <mesh rotation-x={-Math.PI / 2} position={[0, 0, -4]} receiveShadow>
         <planeGeometry args={[62, 82]} />
@@ -302,7 +285,7 @@ function WoodFence({ from, to }: { from: [number, number]; to: [number, number] 
 
 /** Bladerkruin: een bol met golvende, bobbelige rand (ruis op de hoekpunten), zodat hij niet als een bal oogt. */
 const crownCache = new Map<number, THREE.BufferGeometry>();
-function crownGeometry(seed: number, detail = 4) {
+export function crownGeometry(seed: number, detail = 4) {
   const key = seed * 10 + detail;
   const hit = crownCache.get(key);
   if (hit) return hit;

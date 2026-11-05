@@ -7,6 +7,7 @@ import type { OrbitControls as OrbitImpl } from 'three-stdlib';
 import { floors } from './model';
 import { ui, useUi } from './ui';
 import { Environment, Lights } from './world/Environment';
+import { Village } from './world/Village';
 import { Warehouse, officeSlot, zoneKind, zoneView } from './world/Warehouse';
 import { Parking } from './world/Cars';
 import { B } from './world/dims';
@@ -147,6 +148,7 @@ export function HqScene({ onReady }: { onReady?: () => void }) {
       <Lights />
       <SkyLight />
       <Environment forecourtZ={B.Z + B.D / 2 + 9} />
+      <Village />
       <Warehouse />
       <Parking position={[17.5, 0, 6.5]} />
       <OrbitControls

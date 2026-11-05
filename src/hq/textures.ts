@@ -407,3 +407,62 @@ export const brandGradientTex = () =>
     g.fillStyle = grad;
     g.fillRect(0, 0, s, s);
   });
+
+/** Omgeploegde akker: bruine aarde met voren en trekkersporen. */
+export const plowedTex = (rep: [number, number]) =>
+  make('akker', 512, (g, r, s) => {
+    g.fillStyle = '#8a6a4c';
+    g.fillRect(0, 0, s, s);
+    speckle(g, r, s, 9000, ['#7c5e42', '#977658', '#6f5339', '#a0805f'], 1, 3);
+    const rows = 22;
+    for (let i = 0; i < rows; i++) {
+      const y = (i / rows) * s;
+      g.fillStyle = 'rgba(60,40,24,0.35)';
+      g.fillRect(0, y, s, s / rows / 3);
+      g.fillStyle = 'rgba(190,160,120,0.18)';
+      g.fillRect(0, y + s / rows / 2, s, s / rows / 5);
+    }
+  }, rep);
+
+/** Rijp graan: goudgeel met lichte zaairijen. */
+export const wheatTex = (rep: [number, number]) =>
+  make('graan', 512, (g, r, s) => {
+    g.fillStyle = '#c9b06a';
+    g.fillRect(0, 0, s, s);
+    speckle(g, r, s, 14000, ['#bfa45c', '#d6bf7c', '#b39a54', '#dcc88a'], 1, 2.5);
+    for (let i = 0; i < 32; i++) {
+      g.fillStyle = 'rgba(150,120,60,0.16)';
+      g.fillRect(0, (i / 32) * s, s, 3);
+    }
+  }, rep);
+
+/** Jong gewas: groene zaairijen op lichte grond. */
+export const cropTex = (rep: [number, number]) =>
+  make('gewas', 512, (g, r, s) => {
+    g.fillStyle = '#7c9a4a';
+    g.fillRect(0, 0, s, s);
+    speckle(g, r, s, 9000, ['#6f8d40', '#8aa858', '#678537'], 1, 2.5);
+    for (let i = 0; i < 28; i++) {
+      g.fillStyle = 'rgba(120,100,60,0.22)';
+      g.fillRect(0, (i / 28) * s, s, 4);
+    }
+  }, rep);
+
+/** Leien dak: donkergrijze schubben in rijen. */
+export const slateTex = (rep: [number, number]) =>
+  make('leien', 512, (g, r, s) => {
+    g.fillStyle = '#3d4248';
+    g.fillRect(0, 0, s, s);
+    const rows = 16;
+    const h = s / rows;
+    const cols = 12;
+    const w = s / cols;
+    const tones = ['#4a5057', '#41464c', '#52585f', '#3a3f45'];
+    for (let y = 0; y < rows; y++) {
+      const off = (y % 2) * (w / 2);
+      for (let x = -1; x < cols; x++) {
+        g.fillStyle = tones[Math.floor(r() * tones.length)];
+        g.fillRect(x * w + off + 1, y * h, w - 2, h - 1.5);
+      }
+    }
+  }, rep);
