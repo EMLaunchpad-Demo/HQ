@@ -25,7 +25,7 @@
       { "id": "directie", "label": "Directie", "offices": true }
     ],
     "people": [],
-    "officeStyles": { "ebert": "walnoot" }
+    "officeStyles": { "ebert": "walnoot", "martijn": "zwartgoud" }
   },
   "founders": [
     { "id": "ebert", "name": "Ebert", "title": "Founder · Sales & groei" },

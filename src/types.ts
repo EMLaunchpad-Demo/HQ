@@ -109,8 +109,8 @@ export interface HqPerson {
 export interface HqConfig {
   floors: HqFloor[];
   people?: HqPerson[];
-  /** Inrichting van een kantoor per persoon (id), bv. { "ebert": "walnoot" }. Zonder waarde: modern. */
-  officeStyles?: Record<string, 'walnoot' | 'modern'>;
+  /** Inrichting van een kantoor per persoon (id), bv. { "ebert": "walnoot", "martijn": "zwartgoud" }. Zonder waarde: modern. */
+  officeStyles?: Record<string, 'walnoot' | 'zwartgoud' | 'modern'>;
 }
 
 export interface DemoScenario {

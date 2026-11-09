@@ -801,6 +801,272 @@ function WalnutOffice({ o, w, d, h, mood, ctx, online, doorSide }: { o: Occupant
   );
 }
 
+// --- Kantoor in zwart en goud (Martijn): satijnzwarte wanden, boiserie in gepolijst goud ---
+
+const Z_BOX = new THREE.BoxGeometry(1, 1, 1);
+const Z_MAT = {
+  /** Satijnzwart, net niet pikzwart: het licht van de scène tekent de wanden nog. */
+  wall: new THREE.MeshStandardMaterial({ color: '#242327', roughness: 0.5, side: THREE.DoubleSide }),
+  ceil: new THREE.MeshStandardMaterial({ color: '#1a191c', roughness: 0.95, side: THREE.DoubleSide }),
+  lacquer: new THREE.MeshStandardMaterial({ color: '#121214', roughness: 0.22, metalness: 0.3 }),
+  /** Gepolijst goud: echt metaal, het spiegelt het omgevingslicht. */
+  gold: new THREE.MeshStandardMaterial({ color: '#f2c35f', roughness: 0.34, metalness: 1, envMapIntensity: 1.9, emissive: '#3d2706', emissiveIntensity: 0.4 }),
+  glow: new THREE.MeshStandardMaterial({ color: '#ffffff', emissive: '#ffd79a', emissiveIntensity: 2.2 }),
+  rugBorder: new THREE.MeshStandardMaterial({ color: '#a8823a', roughness: 0.9 }),
+  rug: new THREE.MeshStandardMaterial({ color: '#26221f', roughness: 1 }),
+  ivory: new THREE.MeshStandardMaterial({ color: '#e6dccb', roughness: 0.7 }),
+};
+
+/** Een gouden lijst: midden (x, y, z) en maat (x, y, z). */
+type Trim = [number, number, number, number, number, number];
+
+/** Vakken van de achterwand (x-grenzen): een middelste vak voor het takenbord (3,2 m breed), links en rechts telkens twee. */
+const ZG_MID = 1.95;
+function zgCols(xs: number) {
+  if (xs < ZG_MID + 0.7) return [-xs, xs];
+  const m = (ZG_MID + xs) / 2;
+  return [-xs, -m, -ZG_MID, ZG_MID, m, xs];
+}
+
+/** Alle gouden lijsten van het kantoor in één tekenopdracht. */
+function GoldTrim({ parts }: { parts: Trim[] }) {
+  const ref = useRef<THREE.InstancedMesh>(null);
+  useLayoutEffect(() => {
+    const m = new THREE.Matrix4();
+    const p = new THREE.Vector3();
+    const s = new THREE.Vector3();
+    const q = new THREE.Quaternion();
+    parts.forEach(([x, y, z, sx, sy, sz], i) => ref.current!.setMatrixAt(i, m.compose(p.set(x, y, z), q, s.set(sx, sy, sz))));
+    ref.current!.instanceMatrix.needsUpdate = true;
+    ref.current!.computeBoundingSphere();
+  }, [parts]);
+  return <instancedMesh key={parts.length} ref={ref} args={[Z_BOX, Z_MAT.gold, parts.length]} />;
+}
+
+/** Zwart gelakt bureau met een gouden rand, gouden poten en een gouden bureaulamp. */
+function BlackGoldDesk({ screen }: { screen: THREE.Material }) {
+  return (
+    <group>
+      <mesh geometry={Z_BOX} material={Z_MAT.gold} position-y={0.74} scale={[2.06, 0.05, 0.88]} />
+      <mesh geometry={Z_BOX} material={Z_MAT.lacquer} position-y={0.742} scale={[2.02, 0.052, 0.84]} />
+      {[-1, 1].flatMap((sx) =>
+        [-1, 1].map((sz) => <mesh key={`${sx}${sz}`} geometry={Z_BOX} material={Z_MAT.gold} position={[sx * 0.96, 0.36, sz * 0.36]} scale={[0.045, 0.72, 0.045]} />),
+      )}
+      <mesh geometry={Z_BOX} material={Z_MAT.lacquer} position={[0.62, 0.5, 0]} scale={[0.6, 0.4, 0.76]} />
+      <mesh geometry={Z_BOX} material={Z_MAT.gold} position={[0.62, 0.5, -0.385]} scale={[0.2, 0.02, 0.02]} />
+      <group position={[0, 0.77, -0.2]}>
+        <mesh geometry={Z_BOX} material={Z_MAT.gold} position-y={0.03} scale={[0.22, 0.02, 0.16]} />
+        <mesh geometry={Z_BOX} material={Z_MAT.lacquer} position-y={0.36} scale={[0.86, 0.5, 0.03]} />
+        <mesh position={[0, 0.37, 0.017]} material={screen}>
+          <planeGeometry args={[0.8, 0.43]} />
+        </mesh>
+      </group>
+      <group position={[-0.72, 0.77, -0.18]}>
+        <mesh material={Z_MAT.gold} position-y={0.015}>
+          <cylinderGeometry args={[0.08, 0.09, 0.03, 20]} />
+        </mesh>
+        <mesh material={Z_MAT.gold} position-y={0.22}>
+          <cylinderGeometry args={[0.01, 0.01, 0.4, 8]} />
+        </mesh>
+        <mesh material={Z_MAT.gold} position-y={0.44}>
+          <coneGeometry args={[0.12, 0.13, 20, 1, true]} />
+        </mesh>
+        <mesh material={Z_MAT.glow} position-y={0.4} rotation-x={Math.PI / 2}>
+          <circleGeometry args={[0.1, 16]} />
+        </mesh>
+      </group>
+      <Chair color="#151517" />
+    </group>
+  );
+}
+
+/** Kantoor in zwart en goud: satijnzwarte wanden met gouden plint, lambrisering, kroonlijst en deurkader. */
+function BlackGoldOffice({ o, w, d, h, mood, ctx, online, doorSide }: { o: Occupant; w: number; d: number; h: number; mood: Mood; ctx: Ctx; online: boolean; doorSide: 1 | -1 }) {
+  const screen = useMemo(() => new THREE.MeshStandardMaterial({ color: '#000', emissive: '#ffffff', emissiveMap: screenTex(MOOD_COLOR[mood]), emissiveIntensity: 0.9 }), [mood]);
+  const open = useCut() === 'boven'; // Sims-modus: plafond weg, zijwanden laag
+  const sh = open ? CUT : h;
+  const door = sh > DOOR_H + 0.2;
+  const xs = w / 2 - 0.06; // binnenkant van de zijwanden
+  const zb = -d / 2 + 0.03; // binnenkant van de achterwand
+  const zf = d / 2 - 0.3; // het glas aan de voorkant
+  const parts = useMemo(() => {
+    const t: Trim[] = [];
+    // Langs de achterwand (u = x) of een zijwand s (u = z); dep = hoe ver de lijst uit de wand steekt.
+    const on = (wall: 'back' | 1 | -1, u0: number, u1: number, y0: number, y1: number, dep: number) => {
+      const u = (u0 + u1) / 2;
+      const len = u1 - u0;
+      if (len <= 0) return;
+      if (wall === 'back') t.push([u, (y0 + y1) / 2, zb + dep / 2, len, y1 - y0, dep]);
+      else t.push([wall * (xs - dep / 2), (y0 + y1) / 2, u, dep, y1 - y0, len]);
+    };
+    const b = 0.032; // breedte van de paneellijsten
+    const frame = (wall: 'back' | 1 | -1, u0: number, u1: number, y0: number, y1: number) => {
+      on(wall, u0, u1, y1 - b, y1, 0.016);
+      on(wall, u0, u1, y0, y0 + b, 0.016);
+      on(wall, u0, u0 + b, y0 + b, y1 - b, 0.016);
+      on(wall, u1 - b, u1, y0 + b, y1 - b, 0.016);
+    };
+    const RAIL = 0.86;
+    const top = h - 0.3; // bovenkant van de panelen
+    // Achterwand: plint, lambrisering met lijst, kroonlijst. Het takenbord hangt in het middelste vak.
+    on('back', -xs, xs, 0, 0.12, 0.026);
+    on('back', -xs, xs, RAIL - 0.02, RAIL + 0.02, 0.032);
+    on('back', -xs, xs, h - 0.09, h, 0.06);
+    on('back', -xs, xs, h - 0.18, h - 0.16, 0.022);
+    const cols = zgCols(xs);
+    for (let i = 0; i < cols.length - 1; i++) {
+      const [u0, u1] = [cols[i] + 0.14, cols[i + 1] - 0.14];
+      if (u1 - u0 < 0.3) continue;
+      frame('back', u0, u1, 0.24, RAIL - 0.14);
+      if (!(u0 < 0 && u1 > 0)) frame('back', u0, u1, RAIL + 0.16, top); // in het middelste vak hangt het takenbord
+    }
+    // Gouden pilasters tussen de vakken
+    for (const x of cols.slice(1, -1)) on('back', x - 0.025, x + 0.025, 0.12, h - 0.18, 0.02);
+    // Zijwanden: in Sims-modus enkel de plint en een gouden rand bovenop, anders de volledige bekleding.
+    for (const s of [-1, 1] as const) {
+      const d0 = OFFICE_DOOR_Z - 0.6;
+      const d1 = OFFICE_DOOR_Z + 0.6;
+      const segs: [number, number][] = s === doorSide && door ? [[zb, d0 - 0.07], [d1 + 0.07, zf]] : [[zb, zf]];
+      for (const [u0, u1] of segs) on(s, u0, u1, 0, 0.12, 0.026);
+      if (!open) {
+        for (const [u0, u1] of segs) on(s, u0, u1, RAIL - 0.02, RAIL + 0.02, 0.032);
+        on(s, zb, zf, h - 0.09, h, 0.06);
+        on(s, zb, zf, h - 0.18, h - 0.16, 0.022);
+        // Panelen boven de lijst op wat er van de wand overblijft
+        const vrij: [number, number][] = s === doorSide && door ? [[zb, d0 - 0.07]] : [[zb, (zb + zf) / 2], [(zb + zf) / 2, zf]];
+        for (const [u0, u1] of vrij) if (u1 - u0 > 1) frame(s, u0 + 0.16, u1 - 0.16, RAIL + 0.16, top);
+      } else on(s, zb, zf, sh - 0.05, sh, 0.05);
+      // Gouden deurkader rond de schuifdeur
+      if (s === doorSide && door) {
+        on(s, d0 - 0.07, d0, 0, DOOR_H + 0.07, 0.045);
+        on(s, d1, d1 + 0.07, 0, DOOR_H + 0.07, 0.045);
+        on(s, d0, d1, DOOR_H, DOOR_H + 0.07, 0.045);
+      }
+    }
+    return t;
+  }, [w, d, h, open, sh, door, doorSide, xs, zb, zf]);
+  return (
+    <group>
+      {/* Satijnzwarte wanden en plafond */}
+      <mesh position={[0, h / 2, zb]} material={Z_MAT.wall}>
+        <planeGeometry args={[w, h]} />
+      </mesh>
+      {[-1, 1].map((s) =>
+        s === doorSide && door ? (
+          <group key={s}>
+            {[
+              { z: (-d / 2 + OFFICE_DOOR_Z - 0.6) / 2, len: OFFICE_DOOR_Z - 0.6 + d / 2 },
+              { z: (d / 2 + OFFICE_DOOR_Z + 0.6) / 2, len: d / 2 - OFFICE_DOOR_Z - 0.6 },
+            ].map((p) => (
+              <mesh key={p.z} position={[s * xs, sh / 2, p.z]} rotation-y={-s * (Math.PI / 2)} material={Z_MAT.wall}>
+                <planeGeometry args={[p.len, sh]} />
+              </mesh>
+            ))}
+            <mesh position={[s * xs, (DOOR_H + sh) / 2, OFFICE_DOOR_Z]} rotation-y={-s * (Math.PI / 2)} material={Z_MAT.wall}>
+              <planeGeometry args={[1.2, sh - DOOR_H]} />
+            </mesh>
+          </group>
+        ) : (
+          <mesh key={s} position={[s * xs, sh / 2, 0]} rotation-y={-s * (Math.PI / 2)} material={Z_MAT.wall}>
+            <planeGeometry args={[d, sh]} />
+          </mesh>
+        ),
+      )}
+      {!open && (
+        <mesh position-y={h} rotation-x={Math.PI / 2} material={Z_MAT.ceil}>
+          <planeGeometry args={[w, d]} />
+        </mesh>
+      )}
+      <GoldTrim parts={parts} />
+      {/* Gouden ringluchter met warm licht; in Sims-modus (geen plafond) enkel het licht, zodat het takenbord vrij blijft */}
+      {!open && (
+        <group position={[0, h - 0.6, 0]}>
+          <mesh rotation-x={Math.PI / 2} material={Z_MAT.gold}>
+            <torusGeometry args={[0.55, 0.03, 10, 48]} />
+          </mesh>
+          <mesh position-y={-0.035} rotation-x={Math.PI / 2} material={Z_MAT.glow}>
+            <torusGeometry args={[0.55, 0.014, 6, 48]} />
+          </mesh>
+          {[0, 1, 2].map((i) => (
+            <mesh key={i} position={[Math.cos((i * Math.PI * 2) / 3) * 0.55, 0.3, Math.sin((i * Math.PI * 2) / 3) * 0.55]} material={Z_MAT.gold}>
+              <cylinderGeometry args={[0.006, 0.006, 0.6, 6]} />
+            </mesh>
+          ))}
+        </group>
+      )}
+      <pointLight position={[0, h - 0.8, 0]} intensity={4} distance={8} decay={2} color="#ffd9a6" />
+      {/* Bureau */}
+      <group position={[0.4, 0, 0.3]} rotation-y={Math.PI - 0.6}>
+        <BlackGoldDesk screen={screen} />
+        {online && !ctx.loopt.includes(o.id) && <Seat o={o} mood={mood} ctx={ctx} big />}
+      </group>
+      {/* Tapijt met gouden boord */}
+      <mesh rotation-x={-Math.PI / 2} position={[0.2, 0.02, 0.9]} material={Z_MAT.rugBorder}>
+        <planeGeometry args={[4.4, 3]} />
+      </mesh>
+      <mesh rotation-x={-Math.PI / 2} position={[0.2, 0.022, 0.9]} material={Z_MAT.rug}>
+        <planeGeometry args={[4.2, 2.8]} />
+      </mesh>
+      {/* Zetels in ivoor */}
+      {[-0.7, 0.7].map((dx) => (
+        <group key={dx} position={[dx, 0, 1.6]}>
+          <Sofa color="#e6dccb" w={0.95} />
+        </group>
+      ))}
+      {/* Zwarte vitrinekast met gouden leggers (midden van het vak links van het takenbord), staande lamp en plant */}
+      <group position={[-(ZG_MID + (ZG_MID + xs) / 2) / 2, 0, zb + 0.2]}>
+        <mesh geometry={Z_BOX} material={Z_MAT.lacquer} position={[0, 0.95, -0.15]} scale={[1.2, 1.9, 0.04]} />
+        {[-1, 1].map((s) => (
+          <mesh key={s} geometry={Z_BOX} material={Z_MAT.lacquer} position={[s * 0.6, 0.95, 0]} scale={[0.04, 1.9, 0.34]} />
+        ))}
+        {[0.06, 0.5, 0.95, 1.4, 1.88].map((y) => (
+          <mesh key={y} geometry={Z_BOX} material={Z_MAT.gold} position={[0, y, 0]} scale={[1.2, 0.025, 0.34]} />
+        ))}
+        {[
+          { x: -0.35, y: 0.51, bh: 0.2, m: Z_MAT.ivory },
+          { x: -0.29, y: 0.51, bh: 0.18, m: Z_MAT.lacquer },
+          { x: -0.23, y: 0.51, bh: 0.22, m: Z_MAT.ivory },
+          { x: 0.25, y: 0.96, bh: 0.2, m: Z_MAT.lacquer },
+          { x: 0.31, y: 0.96, bh: 0.18, m: Z_MAT.ivory },
+        ].map((k) => (
+          <mesh key={`${k.x}${k.y}`} geometry={Z_BOX} material={k.m} position={[k.x, k.y + k.bh / 2, 0]} scale={[0.05, k.bh, 0.24]} />
+        ))}
+        <mesh material={Z_MAT.gold} position={[0.15, 0.6, 0]}>
+          <sphereGeometry args={[0.09, 18, 12]} />
+        </mesh>
+        <mesh material={Z_MAT.ivory} position={[-0.2, 1.55, 0]}>
+          <cylinderGeometry args={[0.07, 0.1, 0.28, 16]} />
+        </mesh>
+      </group>
+      <group position={[-w / 2 + 0.75, 0, zb + 0.7]}>
+        <mesh material={Z_MAT.gold} position-y={0.015}>
+          <cylinderGeometry args={[0.16, 0.18, 0.03, 24]} />
+        </mesh>
+        <mesh material={Z_MAT.gold} position-y={0.85}>
+          <cylinderGeometry args={[0.014, 0.014, 1.65, 8]} />
+        </mesh>
+        <mesh material={Z_MAT.lacquer} position-y={1.68}>
+          <cylinderGeometry args={[0.16, 0.22, 0.26, 24, 1, true]} />
+        </mesh>
+        {[
+          { y: 1.55, r: 0.22 },
+          { y: 1.81, r: 0.16 },
+        ].map((k) => (
+          <mesh key={k.y} material={Z_MAT.gold} position-y={k.y} rotation-x={Math.PI / 2}>
+            <torusGeometry args={[k.r, 0.012, 6, 32]} />
+          </mesh>
+        ))}
+        <mesh material={Z_MAT.glow} position-y={1.56} rotation-x={Math.PI / 2}>
+          <circleGeometry args={[0.18, 20]} />
+        </mesh>
+      </group>
+      <group position={[w / 2 - 0.7, 0, -d / 2 + 0.7]}>
+        <Plant tall scale={1.1} />
+      </group>
+    </group>
+  );
+}
+
 /** Kantoor van een founder op de tussenverdieping, glas naar de arena. */
 function Office({ o, x, w, ctx, online }: { o: Occupant; x: number; w: number; ctx: Ctx; online: boolean }) {
   const doorSide: 1 | -1 = x < 0 ? -1 : 1;
@@ -811,8 +1077,11 @@ function Office({ o, x, w, ctx, online }: { o: Occupant; x: number; w: number; c
   const h = 3;
   const wh = useCut() === 'boven' ? CUT : h; // muren omlaag in Sims-modus
   const wood = useMemo(() => woodTex([w / 4, d / 4]), [w, d]);
-  // Stijl van het kantoor uit team.config.json (hq.officeStyles), bv. "walnoot" voor Ebert.
-  const walnoot = config.hq?.officeStyles?.[o.id] === 'walnoot';
+  // Stijl van het kantoor uit team.config.json (hq.officeStyles), bv. "walnoot" voor Ebert, "zwartgoud" voor Martijn.
+  const style = config.hq?.officeStyles?.[o.id];
+  const walnoot = style === 'walnoot';
+  const zwartgoud = style === 'zwartgoud';
+  const eigen = walnoot || zwartgoud; // een eigen inrichting in plaats van het standaardkantoor
   return (
     <group position={[x, MZ, -IZ - MD / 2]} onClick={click(`kantoor-${o.id}`, ctx.level)}>
       <mesh rotation-x={-Math.PI / 2} position-y={0.012} receiveShadow>
@@ -848,7 +1117,8 @@ function Office({ o, x, w, ctx, online }: { o: Occupant; x: number; w: number; c
         <GlassFront w={w} h={wh} door={false} hidePane={ctx.active && !ctx.walk} />
       </group>
       {walnoot && <WalnutOffice o={o} w={w} d={d} h={h} mood={mood} ctx={ctx} online={online} doorSide={doorSide} />}
-      {!walnoot && (
+      {zwartgoud && <BlackGoldOffice o={o} w={w} d={d} h={h} mood={mood} ctx={ctx} online={online} doorSide={doorSide} />}
+      {!eigen && (
         <group position={[0.4, 0, 0.3]} rotation-y={Math.PI - 0.6}>
           <Desk wide screen={MOOD_COLOR[mood]} lite={!ctx.active} />
           {online && !ctx.loopt.includes(o.id) && <Seat o={o} mood={mood} ctx={ctx} big />}
@@ -857,7 +1127,7 @@ function Office({ o, x, w, ctx, online }: { o: Occupant; x: number; w: number; c
       <Text font={FONT} fontSize={0.12} color="#0b1526" position={[0, 0.62, 0.72]} anchorY="middle">
         {o.name}
       </Text>
-      {!walnoot && (
+      {!eigen && (
         <>
           {[-0.7, 0.7].map((dx) => (
             <group key={dx} position={[dx, 0, 1.6]}>
@@ -872,7 +1142,7 @@ function Office({ o, x, w, ctx, online }: { o: Occupant; x: number; w: number; c
           </group>
         </>
       )}
-      <group position={walnoot ? [2.3, 1.75, -d / 2 + 0.1] : [0.9, 1.75, -d / 2 + 0.08]}>
+      <group position={walnoot ? [2.3, 1.75, -d / 2 + 0.1] : zwartgoud ? [0, 1.75, -d / 2 + 0.1] : [0.9, 1.75, -d / 2 + 0.08]}>
         {call ? (
           <VideoScreen stream={call} />
         ) : (
