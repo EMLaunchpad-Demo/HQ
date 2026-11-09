@@ -391,7 +391,7 @@ export function Studio() {
         <meshStandardMaterial map={carpet} roughness={1} />
       </mesh>
       <group position={[(px[0] + px[1]) / 2, 0, z0]} rotation-y={Math.PI}>
-        <GlassFront w={px[1] - px[0]} h={wallH} />
+        <GlassFront w={px[1] - px[0]} h={wallH} doorSide={-1} />
       </group>
       {/* Zijwand met akoestische panelen en neon */}
       <mesh position={[px[0] - 0.06, wallH / 2, zc]} material={M.matte}>
@@ -806,14 +806,14 @@ export function Fitness() {
       <mesh rotation-x={-Math.PI / 2} position={[xc, 0.02, zc]} material={M.rubber} receiveShadow>
         <planeGeometry args={[x1 - x0, z1 - z0]} />
       </mesh>
-      {/* Spiegelwand achteraan, met neon erboven */}
-      <mesh position={[xc, 1.25, z0 + 0.03]} material={M.mirror}>
-        <planeGeometry args={[x1 - x0 - 0.3, 2.1]} />
+      {/* Spiegelwand achteraan, met neon erboven. Links blijft een doorgang naar de achterste tussenverdieping. */}
+      <mesh position={[xc + 0.7, 1.25, z0 + 0.03]} material={M.mirror}>
+        <planeGeometry args={[x1 - x0 - 1.7, 2.1]} />
       </mesh>
-      <mesh position={[xc, 1.25, z0]} material={M.black}>
-        <boxGeometry args={[x1 - x0 - 0.2, 2.2, 0.04]} />
+      <mesh position={[xc + 0.7, 1.25, z0]} material={M.black}>
+        <boxGeometry args={[x1 - x0 - 1.6, 2.2, 0.04]} />
       </mesh>
-      <Neon text="EML FIT" color={BRAND.mint} size={0.3} position={[xc, 2.62, z0 + 0.05]} />
+      <Neon text="EML FIT" color={BRAND.mint} size={0.3} position={[xc + 0.7, 2.62, z0 + 0.05]} />
       <Treadmill position={[x0 + 1.1, 0, z0 + 1.6]} />
       <Treadmill position={[x0 + 2.7, 0, z0 + 1.6]} />
       <Bike position={[x0 + 1.1, 0, z0 + 3.8]} />
@@ -878,7 +878,7 @@ export function Fitness() {
           <sphereGeometry args={[0.12, 12, 10]} />
         </mesh>
       ))}
-      <group position={[x0 + 0.4, 0, z1 - 0.4]}>
+      <group position={[x1 - 0.5, 0, z1 - 0.4]}>
         <Plant scale={1.1} />
       </group>
       {/* Rubberen rand in het merkverloop */}

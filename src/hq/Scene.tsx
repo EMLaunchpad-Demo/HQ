@@ -11,6 +11,7 @@ import { Village } from './world/Village';
 import { Warehouse, officeSlot, zoneKind, zoneView } from './world/Warehouse';
 import { Parking } from './world/Cars';
 import { B } from './world/dims';
+import { Walker } from './world/Walker';
 
 const v = (p: [number, number, number]) => new THREE.Vector3(p[0], p[1], p[2] + B.Z);
 
@@ -53,7 +54,7 @@ function CameraRig() {
 
   useFrame((_, dt) => {
     const g = goal.current;
-    if (!g || !controls) return;
+    if (!g || !controls || ui.get().walk) return;
     // Eerste vlucht: rustig van de straat naar het gebouw.
     const k = 1 - Math.exp(-dt * (first.current ? 1.1 : 3.2));
     camera.position.lerp(g.pos, k);
@@ -111,7 +112,8 @@ function ShadowThrottle() {
     gl.shadowMap.needsUpdate = true;
   }, [gl, aim, level]);
   useFrame(() => {
-    if (++n.current % 60 === 0) gl.shadowMap.needsUpdate = true;
+    // Tijdens het rondlopen staan de schaduwen vast: een nieuwe berekening zou je voelen als een hapering.
+    if (++n.current % 60 === 0 && !ui.get().walk) gl.shadowMap.needsUpdate = true;
   });
   return null;
 }
@@ -128,6 +130,7 @@ function FirstFrames({ onReady }: { onReady?: () => void }) {
 export function HqScene({ onReady }: { onReady?: () => void }) {
   // Zakt de framerate (oudere laptop), dan tekenen we met iets minder pixels.
   const [dpr, setDpr] = useState(Math.min(window.devicePixelRatio, 1.75));
+  const walk = useUi((s) => s.walk);
   return (
     <Canvas
       shadows="soft"
@@ -153,6 +156,7 @@ export function HqScene({ onReady }: { onReady?: () => void }) {
       <Parking position={[17.5, 0, 6.5]} />
       <OrbitControls
         makeDefault
+        enabled={!walk}
         target={[0, 4, 30]}
         enableDamping
         dampingFactor={0.08}
@@ -161,6 +165,7 @@ export function HqScene({ onReady }: { onReady?: () => void }) {
         maxDistance={160}
       />
       <CameraRig />
+      <Walker />
       <FirstFrames onReady={onReady} />
       <ShadowThrottle />
     </Canvas>

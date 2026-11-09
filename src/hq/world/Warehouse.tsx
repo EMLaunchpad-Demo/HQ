@@ -3,10 +3,10 @@
 // Kies je een ruimte, dan gaat het HQ in "Sims-modus": dak en plafonds weg, muren aan de camerakant omlaag. Onder een tussenverdieping die
 // helemaal rond loopt, heeft elke afdeling een eigen glazen ruimte; in het midden een open arena met de War Room,
 // de pooltafel en de pingpongtafel. Boven: de kantoren van de founders, de gaming room en het salon.
-import { useEffect, useLayoutEffect, useMemo, useRef } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { Billboard, RoundedBox, Text } from '@react-three/drei';
-import type { ThreeEvent } from '@react-three/fiber';
+import { useFrame, type ThreeEvent } from '@react-three/fiber';
 import { FONT, FONT_MONO, FONT_REGULAR } from '../fonts';
 import { brandGradientTex, carpetTex, cedarTex, concretePanelTex, concreteTex, corrugatedTex, screenTex, walnutTex, woodTex, zincTex } from '../textures';
 import { config } from '../../config';
@@ -20,12 +20,16 @@ import { ArenaCourt, BrandWall, FacadeLogos, FloorLogo, Fitness, Kitchen, Kitche
 import { TaskBoard } from './TaskBoard';
 import { B, ROOM_H, glassMat, steelMat } from './dims';
 import { CUT, CutContext, useCut, type Cut } from './cut';
-import { GlassFront } from './parts';
+import { DOOR_H, GlassFront, SlideDoor } from './parts';
+import { walkPos } from '../walk';
 
 const { W, D, H, RISE, MZ, MD } = B;
 const IX = W / 2 - MD; // binnenrand van de tussenverdieping (x)
 const IZ = D / 2 - MD; // binnenrand (z)
 const LIVE_MS = 30 * 60_000;
+const seatPos = new THREE.Vector3();
+/** Plaats van de zijdeur van de kantoren (lokaal z), vlak achter de glazen voorkant. */
+const OFFICE_DOOR_Z = 1.25;
 
 
 
@@ -61,6 +65,16 @@ const ROOMS: Record<string, Room> = {
 };
 const SPARE: Room = { x: IX + MD / 2, z: -3.5, w: 11, d: MD, facing: '-x' };
 
+/**
+ * Plaats van de deur in de glazen voorkant (lokaal x). Sales en marketing wijken af: daar staan een kolom,
+ * de muur van strategie of de belcabine op de standaardplek.
+ */
+const DOOR_X: Record<string, number> = { sales: 1.25, marketing: -1.25 };
+function doorLocal(id: string, r: Room) {
+  const n = Math.max(1, Math.round(r.w / 2.5));
+  return DOOR_X[id] ?? -(r.w / 2 - r.w / n / 2);
+}
+
 /** Camera per ruimte: van waar je kijkt en waarnaar (lokaal). */
 export type ZoneKind = 'dept' | 'inkom' | 'lounge' | 'directie' | 'studio' | 'keuken';
 
@@ -90,6 +104,63 @@ export function officeSlot(officeId: string) {
   return { x: -span / 2 + w * (i + 0.5), w, level: f.level };
 }
 
+// --- Rondlopen: waar je start en hoe de plek heet ---
+
+/** Startplek per ruimte, in wereldcoördinaten. yaw 0 = kijken naar de achtergevel. */
+export function walkSpawn(spot: string): { x: number; y: number; z: number; yaw: number } {
+  const at = (x: number, y: number, z: number, yaw: number) => ({ x, y, z: z + B.Z, yaw });
+  const f = floors.find((x) => x.id === spot);
+  if (!f) return at(0, 0, D / 2 + 7, 0); // buiten, voor de voordeur
+  const kind = zoneKind(f);
+  if (kind === 'inkom') return at(-3.6, 0, 9.4, -0.35);
+  if (kind === 'lounge') return at(0, 0, -2.6, 0);
+  if (kind === 'studio') return at(10.4, 0, 8.4, Math.PI);
+  if (kind === 'keuken') return at(-11, 0, 8.3, Math.PI / 2 + 0.5);
+  if (kind === 'directie') return at(-11.4, MZ, -11, -Math.PI / 2);
+  const r = ROOMS[f.id] ?? SPARE;
+  // Net binnen, aan de deur, met het gezicht naar de achterwand.
+  const inward = 0.9;
+  const dl = doorLocal(f.id, r);
+  if (r.facing === 'z') return at(r.x + dl, 0, r.z + r.d / 2 - inward, 0);
+  const s = r.facing === 'x' ? 1 : -1;
+  return at(r.x + s * (r.d / 2 - inward), 0, r.z - s * dl, s * (Math.PI / 2));
+}
+
+/** Naam van de plek waar je staat (wereldcoördinaten), voor het label bovenaan. */
+export function walkLabel(wx: number, wy: number, wz: number): string {
+  const x = wx;
+  const z = wz - B.Z;
+  if (Math.abs(x) > W / 2 + 0.3 || Math.abs(z) > D / 2 + 0.3) return 'Buiten';
+  if (wy > MZ - 0.4) {
+    const dir = floors.find((f) => zoneKind(f) === 'directie');
+    if (z < -IZ - 0.25 && dir && Math.abs(x) < 10) {
+      const slot = dir.offices.find((o) => {
+        const s = officeSlot(`kantoor-${o.id}`);
+        return s && Math.abs(x - s.x) <= s.w / 2;
+      });
+      if (slot) return `Kantoor ${slot.name}`;
+    }
+    if (x < -IX && z > -IZ && z < IZ) return 'Gaming room';
+    if (x > IX && z > -IZ && z < 0) return 'Fitness';
+    return 'Tussenverdieping';
+  }
+  if (wy > 0.6) return 'Trap';
+  for (const f of floors) {
+    if (zoneKind(f) !== 'dept') continue;
+    const r = ROOMS[f.id];
+    if (!r) continue;
+    const hw = r.facing === 'z' ? r.w / 2 : r.d / 2;
+    const hd = r.facing === 'z' ? r.d / 2 : r.w / 2;
+    if (Math.abs(x - r.x) <= hw && Math.abs(z - r.z) <= hd) return f.label;
+  }
+  if (Math.abs(x - SPARE.x) <= SPARE.d / 2 && Math.abs(z - SPARE.z) <= SPARE.w / 2) return 'Vergaderzaal';
+  if (z > IZ && x > 3.4) return x < 9 ? 'Podcast' : 'Content studio';
+  if (x < -9 && z > 3.5) return 'Keuken & lounge';
+  if (z > 5) return 'Inkom';
+  if (z > -1.6 && Math.abs(x) < 7) return 'War Room';
+  return 'Arena';
+}
+
 // --- Gedeelde kleine onderdelen ---
 
 interface Ctx {
@@ -100,6 +171,8 @@ interface Ctx {
   level: number;
   /** Zijn de taken te geloven (zie takenStand in model.ts)? */
   takenOk: boolean;
+  /** Rondloopmodus: alles op volle detail en al het glas op zijn plaats. */
+  walk: boolean;
 }
 
 const click = (id: string, level: number) => (e: ThreeEvent<MouseEvent>) => {
@@ -118,8 +191,18 @@ function liveStatus(w: LiveWork | undefined, mood: Mood) {
 
 function Seat({ o, mood, ctx, big, pose = 'zit' }: { o: Occupant; mood: Mood; ctx: Ctx; big?: boolean; pose?: 'zit' | 'staat' }) {
   const status = o.kind === 'rol' ? undefined : liveStatus(ctx.live[o.id], mood);
+  // Tijdens het rondlopen krijgt enkel wie in je buurt is alle detail en een naamkaartje.
+  const root = useRef<THREE.Group>(null);
+  const [near, setNear] = useState(false);
+  useFrame(() => {
+    if (!ctx.walk || !root.current) return;
+    root.current.getWorldPosition(seatPos);
+    const d = Math.hypot(seatPos.x - walkPos.x, seatPos.z - walkPos.z) + Math.abs(seatPos.y - walkPos.y) * 2;
+    if (near ? d > 9 : d < 7.5) setNear(!near);
+  });
+  const shown = ctx.walk ? near : ctx.active;
   return (
-    <group position-z={pose === 'zit' ? 0.62 : 0}>
+    <group ref={root} position-z={pose === 'zit' ? 0.62 : 0} userData={{ noMerge: true }}>
       <Character
         id={o.id}
         name={o.name}
@@ -127,11 +210,11 @@ function Seat({ o, mood, ctx, big, pose = 'zit' }: { o: Occupant; mood: Mood; ct
         mood={mood}
         pose={pose}
         working={mood === 'bezig'}
-        label={!!status || (ctx.active && (o.kind === 'hoofd' || o.kind === 'cos' || o.kind === 'mens'))}
+        label={ctx.walk ? near && o.kind !== 'rol' : !!status || (ctx.active && (o.kind === 'hoofd' || o.kind === 'cos' || o.kind === 'mens'))}
         status={status}
         big={big}
         selected={ctx.focus === o.id}
-        lite={!ctx.active}
+        lite={!shown}
         onClick={click(o.id, ctx.level)}
       />
     </group>
@@ -180,7 +263,7 @@ function MeetingRoom({ room, ctx }: { room: Room; ctx: Ctx }) {
         </group>
       ))}
       <group position-z={room.d / 2}>
-        <GlassFront w={room.w} h={rh} every={2.2} hidePane={ctx.active} />
+        <GlassFront w={room.w} h={rh} every={2.2} doorSide={-1} hidePane={ctx.active && !ctx.walk} />
       </group>
       {/* Tafel en stoelen */}
       <mesh position={[0, 0.75, 0]} material={M.oak} castShadow>
@@ -391,7 +474,7 @@ function DeptRoom({ floor, room, ctx }: { floor: FloorModel; room: Room; ctx: Ct
       ))}
       <DarkCeiling w={room.w} d={room.d} />
       <group position-z={room.d / 2}>
-        <GlassFront w={room.w} h={rh} hidePane={ctx.active} />
+        <GlassFront w={room.w} h={rh} doorX={doorLocal(floor.id, room)} hidePane={ctx.active && !ctx.walk} />
       </group>
       {/* Takenbord aan de achtermuur */}
       <group position={[room.w / 2 - 2.6, 1.95, -room.d / 2 + 0.08]}>
@@ -583,7 +666,7 @@ function BookWall({ w, h }: { w: number; h: number }) {
 }
 
 /** Mid-century kantoor (Ebert): notenhout, boekenwand, cognac leder, warm licht. */
-function WalnutOffice({ o, w, d, h, mood, ctx, online }: { o: Occupant; w: number; d: number; h: number; mood: Mood; ctx: Ctx; online: boolean }) {
+function WalnutOffice({ o, w, d, h, mood, ctx, online, doorSide }: { o: Occupant; w: number; d: number; h: number; mood: Mood; ctx: Ctx; online: boolean; doorSide: 1 | -1 }) {
   const panel = useMemo(() => walnutTex([w / 2.5, h / 2.5]), [w, h]);
   const panelSide = useMemo(() => walnutTex([d / 2.5, h / 2.5]), [d, h]);
   const ceil = useMemo(() => walnutTex([w / 2.5, d / 2.5]), [w, d]);
@@ -597,12 +680,30 @@ function WalnutOffice({ o, w, d, h, mood, ctx, online }: { o: Occupant; w: numbe
         <planeGeometry args={[w, h]} />
         <meshStandardMaterial map={panel} roughness={0.5} />
       </mesh>
-      {[-1, 1].map((s) => (
-        <mesh key={s} position={[s * (w / 2 - 0.06), sh / 2, 0]} rotation-y={-s * (Math.PI / 2)}>
-          <planeGeometry args={[d, sh]} />
-          <meshStandardMaterial map={panelSide} roughness={0.5} />
-        </mesh>
-      ))}
+      {[-1, 1].map((s) =>
+        s === doorSide && sh > DOOR_H + 0.2 ? (
+          <group key={s}>
+            {[
+              { z: (-d / 2 + OFFICE_DOOR_Z - 0.6) / 2, len: OFFICE_DOOR_Z - 0.6 + d / 2 },
+              { z: (d / 2 + OFFICE_DOOR_Z + 0.6) / 2, len: d / 2 - OFFICE_DOOR_Z - 0.6 },
+            ].map((p) => (
+              <mesh key={p.z} position={[s * (w / 2 - 0.06), sh / 2, p.z]} rotation-y={-s * (Math.PI / 2)}>
+                <planeGeometry args={[p.len, sh]} />
+                <meshStandardMaterial map={panelSide} roughness={0.5} />
+              </mesh>
+            ))}
+            <mesh position={[s * (w / 2 - 0.06), (DOOR_H + sh) / 2, OFFICE_DOOR_Z]} rotation-y={-s * (Math.PI / 2)}>
+              <planeGeometry args={[1.2, sh - DOOR_H]} />
+              <meshStandardMaterial map={panelSide} roughness={0.5} />
+            </mesh>
+          </group>
+        ) : (
+          <mesh key={s} position={[s * (w / 2 - 0.06), sh / 2, 0]} rotation-y={-s * (Math.PI / 2)}>
+            <planeGeometry args={[d, sh]} />
+            <meshStandardMaterial map={panelSide} roughness={0.5} />
+          </mesh>
+        ),
+      )}
       {!open && (
         <mesh position-y={h} rotation-x={Math.PI / 2}>
           <planeGeometry args={[w, d]} />
@@ -687,7 +788,7 @@ function WalnutOffice({ o, w, d, h, mood, ctx, online }: { o: Occupant; w: numbe
           <meshStandardMaterial color="#2b2b2b" roughness={0.9} />
         </mesh>
       </group>
-      <group position={[-w / 2 + 0.7, 0, 1.4]}>
+      <group position={[-w / 2 + 0.7, 0, -0.5]}>
         <Plant tall scale={1.2} />
       </group>
       <group position-y={0.005}>
@@ -699,6 +800,7 @@ function WalnutOffice({ o, w, d, h, mood, ctx, online }: { o: Occupant; w: numbe
 
 /** Kantoor van een founder op de tussenverdieping, glas naar de arena. */
 function Office({ o, x, w, ctx, online }: { o: Occupant; x: number; w: number; ctx: Ctx; online: boolean }) {
+  const doorSide: 1 | -1 = x < 0 ? -1 : 1;
   const tasks = ctx.byOwner[o.id] ?? [];
   const mood: Mood = online ? moodOf(tasks, undefined, ctx.takenOk) : 'offline';
   const call = useCall((s) => (s.peer === o.id && s.status === 'verbonden' ? s.remote : null));
@@ -714,15 +816,35 @@ function Office({ o, x, w, ctx, online }: { o: Occupant; x: number; w: number; c
         <planeGeometry args={[w - 0.1, d - 0.1]} />
         <meshStandardMaterial map={wood} roughness={0.55} color={ctx.focus === `kantoor-${o.id}` ? '#fff7ea' : '#ffffff'} />
       </mesh>
-      {[-1, 1].map((s) => (
-        <mesh key={s} position={[(s * w) / 2, wh / 2, 0]} material={M.white}>
-          <boxGeometry args={[0.1, wh, d]} />
-        </mesh>
-      ))}
+      {[-1, 1].map((s) =>
+        // De voorkant ligt tegen de balustrade: je komt binnen langs een schuifdeur in de buitenste zijwand.
+        s === doorSide && wh > DOOR_H + 0.2 ? (
+          <group key={s}>
+            {[
+              { z: (-d / 2 + OFFICE_DOOR_Z - 0.6) / 2, len: OFFICE_DOOR_Z - 0.6 + d / 2 },
+              { z: (d / 2 + OFFICE_DOOR_Z + 0.6) / 2, len: d / 2 - OFFICE_DOOR_Z - 0.6 },
+            ].map((p) => (
+              <mesh key={p.z} position={[(s * w) / 2, wh / 2, p.z]} material={M.white}>
+                <boxGeometry args={[0.1, wh, p.len]} />
+              </mesh>
+            ))}
+            <mesh position={[(s * w) / 2, (DOOR_H + wh) / 2, OFFICE_DOOR_Z]} material={M.white}>
+              <boxGeometry args={[0.1, wh - DOOR_H, 1.2]} />
+            </mesh>
+            <group position={[(s * w) / 2, 0, OFFICE_DOOR_Z]} rotation-y={Math.PI / 2}>
+              <SlideDoor w={1.2} />
+            </group>
+          </group>
+        ) : (
+          <mesh key={s} position={[(s * w) / 2, wh / 2, 0]} material={M.white}>
+            <boxGeometry args={[0.1, wh, d]} />
+          </mesh>
+        ),
+      )}
       <group position-z={d / 2 - 0.3}>
-        <GlassFront w={w} h={wh} hidePane={ctx.active} />
+        <GlassFront w={w} h={wh} door={false} hidePane={ctx.active && !ctx.walk} />
       </group>
-      {walnoot && <WalnutOffice o={o} w={w} d={d} h={h} mood={mood} ctx={ctx} online={online} />}
+      {walnoot && <WalnutOffice o={o} w={w} d={d} h={h} mood={mood} ctx={ctx} online={online} doorSide={doorSide} />}
       {!walnoot && (
         <group position={[0.4, 0, 0.3]} rotation-y={Math.PI - 0.6}>
           <Desk wide screen={MOOD_COLOR[mood]} lite={!ctx.active} />
@@ -836,6 +958,11 @@ function Stair({ x, side }: { x: number; side: 1 | -1 }) {
       <mesh position={[side * 0.1, MZ - 0.12, z0 - run - 0.6]} material={steelMat}>
         <boxGeometry args={[width + 0.4, 0.24, 1.2]} />
       </mesh>
+      {/* Leuning rond het bordes: je kan er enkel naar de tussenverdieping af */}
+      <group position-x={-x}>
+        <Railing from={[x + side * 0.1 - 0.85, z0 - run - 1.2]} to={[x + side * 0.1 + 0.85, z0 - run - 1.2]} />
+        <Railing from={[x + side * 0.1 - side * 0.85, z0 - run - 1.2]} to={[x + side * 0.1 - side * 0.85, z0 - run]} />
+      </group>
     </group>
   );
 }
@@ -986,7 +1113,7 @@ function Shell() {
       ))}
       {/* Voorgevel: glas over de volle hoogte tussen cederhouten koppen */}
       <group position-z={D / 2 + 0.05}>
-        <GlassFront w={W - 7} h={frontH} every={2.5} door={false} />
+        <GlassFront w={W - 7} h={frontH} every={2.5} door={false} wide />
         {[-1, 1].map((s) => (
           <mesh key={s} position={[s * (W / 2 - 1.6), frontH / 2, 0.1]} castShadow receiveShadow>
             <boxGeometry args={[3.6, frontH, 0.4]} />
@@ -1004,12 +1131,9 @@ function Shell() {
           </mesh>
         )}
         {/* Inkom: cederhouten portaal met glazen deuren en stalen luifel */}
-        <mesh position={[0, Math.min(2.6, frontH) / 2, 0.05]} material={steelMat}>
-          <boxGeometry args={[3.4, Math.min(2.6, frontH), 0.1]} />
-        </mesh>
-        {frontH > 2 && (
-          <mesh position={[0, 1.27, 0.11]} material={glassMat}>
-            <planeGeometry args={[3.2, 2.5]} />
+        {frontH <= DOOR_H + 0.2 && (
+          <mesh position={[0, frontH / 2, 0.05]} material={steelMat}>
+            <boxGeometry args={[3.4, frontH, 0.1]} />
           </mesh>
         )}
         {cut === 'geen' && (
@@ -1244,18 +1368,19 @@ function HitShell() {
 export function Warehouse() {
   const level = useUi((s) => s.level);
   const focus = useUi((s) => s.focus);
+  const walk = useUi((s) => s.walk);
   const taken = useHq((s) => s.taken);
   const live = useHq((s) => s.live);
   const online = useHq((s) => s.online);
   const takenOk = useHq((s) => takenStand(s).ok);
   const byOwner = useMemo(() => tasksByOwner(taken), [taken]);
-  const ctxFor = (f?: FloorModel): Ctx => ({ byOwner, live, active: !!f && f.level === level, focus, level: f?.level ?? 0, takenOk });
+  const ctxFor = (f?: FloorModel): Ctx => ({ byOwner, live, active: walk || (!!f && f.level === level), focus, level: f?.level ?? 0, takenOk, walk });
   const inkom = floors.find((f) => zoneKind(f) === 'inkom');
   const lounge = floors.find((f) => zoneKind(f) === 'lounge');
   const directie = floors.find((f) => zoneKind(f) === 'directie');
   const depts = floors.filter((f) => zoneKind(f) === 'dept');
   const floorTex = useMemo(() => concreteTex([12, 8]), []);
-  const chosen = floors.find((f) => f.level === level);
+  const chosen = walk ? undefined : floors.find((f) => f.level === level);
   const kind = chosen ? zoneKind(chosen) : null;
   const cut: Cut = !chosen ? 'geen' : kind === 'directie' || (kind === 'lounge' && focus !== 'beneden') ? 'boven' : 'beneden';
   const upper = cut !== 'beneden'; // tussenverdieping tonen
@@ -1298,7 +1423,7 @@ export function Warehouse() {
           const slot = officeSlot(`kantoor-${o.id}`)!;
           return <Office key={o.id} o={o} x={slot.x} w={slot.w} ctx={ctxFor(directie)} online={online.includes(o.id)} />;
         })}
-      {level < 0 && <HitShell />}
+      {level < 0 && !walk && <HitShell />}
     </group>
     </CutContext.Provider>
   );

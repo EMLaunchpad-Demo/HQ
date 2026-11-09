@@ -32,7 +32,7 @@ export function TaskBoard({ title, subtitle, tasks, w = 3.6, h = 2.1 }: { title:
 
   if (far)
     return (
-      <group>
+      <group userData={{ noMerge: true }}>
         <mesh position-z={-0.03}>
           <boxGeometry args={[w + 0.12, h + 0.12, 0.05]} />
           <meshStandardMaterial color="#111825" roughness={0.4} metalness={0.5} />
@@ -45,7 +45,7 @@ export function TaskBoard({ title, subtitle, tasks, w = 3.6, h = 2.1 }: { title:
     );
 
   return (
-    <group>
+    <group userData={{ noMerge: true }}>
       <mesh position-z={-0.03}>
         <boxGeometry args={[w + 0.12, h + 0.12, 0.05]} />
         <meshStandardMaterial color="#111825" roughness={0.4} metalness={0.5} />

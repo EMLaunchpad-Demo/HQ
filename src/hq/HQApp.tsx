@@ -1,7 +1,7 @@
 // Het virtuele hoofdkantoor (#/hq): het gebouw in 3D met daarover de interface.
 // Kijken en navigeren; chatten met de agents gebeurt in Claude, niet hier.
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowLeft, Bell, Building2, ChevronDown, ExternalLink, Mic, MicOff, PhoneCall, PhoneOff, RefreshCw, Video, VideoOff } from 'lucide-react';
+import { ArrowLeft, Bell, Footprints, Building2, ChevronDown, ExternalLink, Mic, MicOff, PhoneCall, PhoneOff, RefreshCw, Video, VideoOff } from 'lucide-react';
 import { config, fileUrl } from '../config';
 import { Logo } from '../components/Logo';
 import { HqScene } from './Scene';
@@ -11,6 +11,7 @@ import { accept, call, decline, hangup, nameOf, setMe, startPresence, toggleCam,
 import { meldingenAanzetten, meldingenToestemming } from './bel';
 import { moodOf } from './world/Warehouse';
 import { MOOD_COLOR, type Mood } from './world/Character';
+import { vraagMuis } from './world/Walker';
 
 const MOOD_LABEL: Record<Mood, string> = { bezig: 'Bezig', volgende: 'Volgende', open: 'Open taken', rust: 'Niets open', offline: 'Niet in het HQ' };
 const STATUS_COLOR: Record<string, string> = { 'In uitvoering': '#2ff0a6', Volgende: '#ffd23f', 'Niet gestart': '#7c8a97', Done: '#2f7bff' };
@@ -553,11 +554,89 @@ function CallUi() {
   );
 }
 
+/** Start rondlopen: in de gekozen ruimte, anders buiten voor de voordeur. */
+function startWalk() {
+  const { level } = ui.get();
+  const f = floors.find((x) => x.level === level);
+  ui.set({ walk: true, walkPaused: false, walkDrag: false, walkSpot: f?.id ?? '-1', focus: null });
+  vraagMuis();
+}
+
+function stopWalk() {
+  const { walkSpot } = ui.get();
+  ui.set({ walk: false, walkPaused: false, walkDrag: false });
+  ui.go(floors.find((x) => x.id === walkSpot.split('#')[0])?.level ?? -1);
+}
+
+/** Terwijl je rondloopt: enkel de naam van de plek, een stipje in het midden en wat de toetsen doen. Esc opent het menu. */
+function WalkHud() {
+  const room = useUi((s) => s.walkRoom);
+  const paused = useUi((s) => s.walkPaused);
+  const drag = useUi((s) => s.walkDrag);
+  const spring = (id: string) => {
+    ui.set({ walkSpot: `${id}#${Date.now()}` });
+    vraagMuis();
+  };
+  return (
+    <>
+      <div className="pointer-events-none fixed left-1/2 top-4 z-30 -translate-x-1/2 rounded-full px-4 py-1.5 text-[13px] font-semibold text-white" style={glass}>
+        {room || 'EM Launchpad HQ'}
+      </div>
+      {!paused && <div className="pointer-events-none fixed left-1/2 top-1/2 z-30 h-1 w-1 -translate-x-1/2 -translate-y-1/2 rounded-full" style={{ background: 'rgba(255,255,255,.75)', boxShadow: '0 0 3px rgba(0,0,0,.8)' }} />}
+      {!paused && (
+        <div className="pointer-events-none fixed bottom-4 left-1/2 z-30 -translate-x-1/2 rounded-full px-4 py-1.5 font-mono text-[10px] uppercase tracking-wider text-mid" style={glass}>
+          ZQSD of pijltjes = stappen · Shift = sneller · {drag ? 'slepen' : 'muis'} = kijken · Esc = menu
+        </div>
+      )}
+      {drag && !paused && (
+        <button className="pointer-events-auto fixed right-4 top-4 z-30 rounded-full px-3 py-1.5 text-[12px] text-mid hover:text-white" style={glass} onClick={() => ui.set({ walkPaused: true })}>
+          Menu
+        </button>
+      )}
+      {paused && (
+        <div className="pointer-events-auto fixed inset-0 z-40 flex items-center justify-center" style={{ background: 'rgba(6,8,12,0.45)' }}>
+          <div className="w-[420px] rounded-3xl p-6" style={glass}>
+            <h2 className="text-[22px] font-extrabold leading-tight text-white">
+              Rondlopen in het <span className="grad-text">HQ</span>
+            </h2>
+            <p className="mt-1 text-[13px] text-mid">Je staat nu op: {room || 'buiten'}. Ga verder of spring naar een ruimte.</p>
+            <button className={`${btn} mt-4 w-full`} style={btnGrad} onClick={vraagMuis}>
+              <Footprints size={15} /> Verder wandelen
+            </button>
+            <div className="mt-3 grid grid-cols-2 gap-1.5">
+              <button className="rounded-lg px-3 py-1.5 text-left text-[12.5px] text-hi hover:bg-white/5" onClick={() => spring('-1')}>
+                Buiten, voor de deur
+              </button>
+              {floors.map((f) => (
+                <button key={f.id} className="rounded-lg px-3 py-1.5 text-left text-[12.5px] text-hi hover:bg-white/5" onClick={() => spring(f.id)}>
+                  {f.label}
+                </button>
+              ))}
+            </div>
+            <button className="mt-3 w-full text-center text-[12px] text-dim hover:text-hi" onClick={stopWalk}>
+              Terug naar het bovenaanzicht
+            </button>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
 function useKeys() {
   useEffect(() => {
     const on = (e: KeyboardEvent) => {
       if ((e.target as HTMLElement)?.tagName === 'INPUT') return;
-      const { level } = ui.get();
+      const { level, walk, walkPaused, walkDrag } = ui.get();
+      if (walk) {
+        // Met vergrendelde muis haalt de browser zelf de muis terug bij Esc; daarna sluit Esc het menu.
+        if (e.key === 'Escape') {
+          if (walkPaused) stopWalk();
+          else if (walkDrag) ui.set({ walkPaused: true });
+        }
+        return;
+      }
+      if (e.code === 'KeyF') return startWalk();
       if (e.key === 'ArrowUp') ui.go(Math.min(floors.length - 1, level + 1));
       else if (e.key === 'ArrowDown') ui.go(Math.max(-1, level - 1));
       else if (e.key === 'Escape') ui.go(-1);
@@ -585,10 +664,11 @@ export default function HQApp() {
   const byOwner = useMemo(() => tasksByOwner(taken), [taken]);
   const floor = floors.find((f) => f.level === level);
   const [ready, setReady] = useState(false);
+  const walk = useUi((s) => s.walk);
 
   return (
     <div className="fixed inset-0 z-10" style={{ background: '#cfe2ef' }}>
-      <div className="absolute inset-0" style={{ filter: 'saturate(1.1) contrast(1.06)' }}>
+      <div data-hq-canvas className="absolute inset-0" style={{ filter: 'saturate(1.1) contrast(1.06)' }}>
         <HqScene onReady={() => setReady(true)} />
       </div>
       {/* Zacht vignet, zoals een foto */}
@@ -604,7 +684,8 @@ export default function HQApp() {
         </div>
       )}
 
-      <div className="pointer-events-none fixed inset-0 z-20">
+      {walk && <WalkHud />}
+      <div className="pointer-events-none fixed inset-0 z-20" style={{ display: walk ? 'none' : undefined }}>
         {/* Merk en bron */}
         <div className="pointer-events-auto absolute left-4 top-4 flex items-center gap-3 rounded-2xl px-3.5 py-2.5" style={glass}>
           <Logo src={config.company.logo} size={34} />
@@ -617,6 +698,9 @@ export default function HQApp() {
         </div>
 
         <div className="pointer-events-auto absolute right-4 top-4 flex items-center gap-2">
+          <button className={btn} style={btnGrad} onClick={startWalk} title="Loop als mens door het gebouw (toets F)">
+            <Footprints size={14} /> Rondlopen
+          </button>
           <MeldingenKnop />
           <WhoAmI />
           {/* In de losse versie (repo HQ, online) is er geen organigram om naar terug te gaan. */}
@@ -643,11 +727,11 @@ export default function HQApp() {
         </div>
 
         <div className="absolute bottom-4 left-1/2 -translate-x-1/2 rounded-full px-4 py-1.5 font-mono text-[10px] uppercase tracking-wider text-mid" style={glass}>
-          Slepen = draaien · rechtsklik = schuiven · scrollen = zoomen · pijltjes = volgende ruimte · Esc = buiten
+          Slepen = draaien · rechtsklik = schuiven · scrollen = zoomen · pijltjes = volgende ruimte · Esc = buiten · F = rondlopen
         </div>
       </div>
 
-      <Welcome />
+      {!walk && <Welcome />}
       <CallUi />
       <VerlopenBalk />
     </div>

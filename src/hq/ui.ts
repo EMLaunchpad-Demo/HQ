@@ -9,9 +9,19 @@ export interface UiState {
   hoverLevel: number | null;
   /** Telt op bij elke "camera opnieuw richten". */
   aim: number;
+  /** Rondloopmodus: je loopt als mens door het gebouw. */
+  walk: boolean;
+  /** Muis vrij (Esc): het menu staat open en je staat stil. */
+  walkPaused: boolean;
+  /** Geen muisvergrendeling mogelijk: rondkijken door te slepen. */
+  walkDrag: boolean;
+  /** Plek om te starten: id van een ruimte, -1 = buiten voor de deur (achter # staat een teller voor opnieuw springen). */
+  walkSpot: string;
+  /** Naam van de ruimte waar je nu staat. */
+  walkRoom: string;
 }
 
-let state: UiState = { level: -1, focus: null, hoverLevel: null, aim: 0 };
+let state: UiState = { level: -1, focus: null, hoverLevel: null, aim: 0, walk: false, walkPaused: false, walkDrag: false, walkSpot: '-1', walkRoom: '' };
 const subs = new Set<() => void>();
 
 export const ui = {
