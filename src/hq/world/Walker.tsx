@@ -16,8 +16,8 @@ import { POOL_PLEK } from './PoolSpel';
 import { walkLabel, walkSpawn } from './Warehouse';
 
 const EYE = 1.68;
-const WALK = 2.3; // m/s: rustig wandelen voelt in beeld beter dan de echte 1,4 m/s
-const RUN = 4.4;
+const WALK = 1.9; // m/s: past bij de paslengte van de loopcyclus (Character.tsx)
+const RUN = 4.0;
 const SENS = 0.0021;
 const LIMIT = 92;
 
@@ -247,7 +247,7 @@ export function Walker() {
     const wx = ((-sin * fwd + cos * str) / norm) * speed;
     const wz = ((-cos * fwd - sin * str) / norm) * speed;
     // Rustig op gang komen en uitbollen, zoals een lichaam.
-    const acc = 1 - Math.exp(-dt * 9);
+    const acc = 1 - Math.exp(-dt * 7);
     vel.current.x += (wx - vel.current.x) * acc;
     vel.current.y += (wz - vel.current.y) * acc;
 
@@ -290,8 +290,8 @@ export function Walker() {
     // Je mannetje draait zich naar waar het heen loopt; in first person kijkt het waar jij kijkt.
     const v = Math.hypot(vel.current.x, vel.current.y);
     if (eerste) walkHoofd.ry = yaw.current;
-    else if (v > 0.15) walkHoofd.ry = hoekNaar(walkHoofd.ry, Math.atan2(-vel.current.x, -vel.current.y), 1 - Math.exp(-dt * 11));
-    walkHoofd.snel = Math.min(1.6, v / WALK);
+    else if (v > 0.15) walkHoofd.ry = hoekNaar(walkHoofd.ry, Math.atan2(-vel.current.x, -vel.current.y), 1 - Math.exp(-dt * 8));
+    walkHoofd.snel = Math.min(2.2, v / WALK);
 
     const moving = Math.min(1, v / WALK);
     bob.current += dt * (run ? 11 : 8.2) * moving;

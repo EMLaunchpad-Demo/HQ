@@ -18,7 +18,7 @@ export const MOOD_COLOR: Record<Mood, string> = {
   offline: '#5b6670',
 };
 
-const SKIN = ['#e9c3a5', '#d7a986', '#c08a66', '#9c6b4b', '#f0d2bb', '#7d5139'];
+const SKIN = ['#e3b08e', '#d29a76', '#b98059', '#94633f', '#ebbd9d', '#74492f'];
 const HAIR = ['#2a1f18', '#4a3424', '#7b5a3a', '#a07c50', '#1a1a1a', '#5e3e28', '#3a2a20'];
 const SHIRT = ['#f2f1ec', '#d4dde7', '#e7e1d6', '#bfcbd6', '#f6f6f4', '#cfd6cf'];
 const JACKET = ['#1f2733', '#2c3440', '#33302d', '#24303f', '#3a3f44'];
@@ -88,13 +88,15 @@ function Haar({ stijl, kleur, seed }: { stijl: HaarStijl; kleur: string; seed: n
   }, [lokken, kleur]);
   return (
     <instancedMesh ref={ref} args={[haarVorm, undefined, lokken.length]} castShadow>
-      <meshStandardMaterial color="#ffffff" roughness={0.62} />
+      <meshStandardMaterial color="#ffffff" roughness={0.42} />
     </instancedMesh>
   );
 }
 
-const OOG_WIT = new THREE.MeshStandardMaterial({ color: '#f1eee8', roughness: 0.18 });
+const OOG_WIT = new THREE.MeshStandardMaterial({ color: '#fbf9f5', roughness: 0.15, emissive: '#ffffff', emissiveIntensity: 0.08 });
 const PUPIL = new THREE.MeshStandardMaterial({ color: '#060606', roughness: 0.1 });
+const LICHTJE = new THREE.MeshBasicMaterial({ color: '#ffffff' });
+const WIMPER = new THREE.MeshStandardMaterial({ color: '#2a1d14', roughness: 0.6 });
 const oorGeo = (() => {
   const g = new THREE.SphereGeometry(1, 12, 10);
   g.scale(0.0085, 0.024, 0.016);
@@ -153,17 +155,17 @@ export function Character({ id, name, shirt, mood, pose = 'zit', working, label,
     const eigen = FOUNDERS[id];
     if (eigen) return eigen;
     const STIJLEN: HaarStijl[] = ['kort', 'knot', 'lang', 'zij'];
-    const colbert = big || (h >> 15) % 3 === 0;
-    const hemd = SHIRT[(h >> 9) % SHIRT.length];
+    const colbert = big || (h >>> 15) % 3 === 0;
+    const hemd = SHIRT[(h >>> 9) % SHIRT.length];
     return {
       huid: SKIN[h % SKIN.length],
-      haar: HAIR[(h >> 3) % HAIR.length],
-      stijl: STIJLEN[(h >> 12) % 4],
-      ogen: ['#3f2a1c', '#59626a', '#4a5a3a', '#2c1c12'][(h >> 5) % 4],
-      top: colbert ? 'colbert' : (h >> 20) % 2 ? 'trui' : 'hemd',
-      topKleur: colbert ? JACKET[(h >> 17) % JACKET.length] : (h >> 20) % 2 ? JACKET[(h >> 18) % JACKET.length] : hemd,
+      haar: HAIR[(h >>> 3) % HAIR.length],
+      stijl: STIJLEN[(h >>> 12) % 4],
+      ogen: ['#3f2a1c', '#59626a', '#4a5a3a', '#2c1c12'][(h >>> 5) % 4],
+      top: colbert ? 'colbert' : (h >>> 20) % 2 ? 'trui' : 'hemd',
+      topKleur: colbert ? JACKET[(h >>> 17) % JACKET.length] : (h >>> 20) % 2 ? JACKET[(h >>> 18) % JACKET.length] : hemd,
       hemd,
-      broek: PANTS[(h >> 6) % PANTS.length],
+      broek: PANTS[(h >>> 6) % PANTS.length],
       schoen: '#1b1a19',
       zool: '#121110',
     };
@@ -174,12 +176,16 @@ export function Character({ id, name, shirt, mood, pose = 'zit', working, label,
 
   const mats = useMemo(
     () => {
-      const stof = (color: string, roughness: number) => new THREE.MeshStandardMaterial({ color, roughness, bumpMap: stofReliëf, bumpScale: 0.6 });
+      const stof = (color: string, roughness: number) => new THREE.MeshStandardMaterial({ color, roughness, bumpMap: stofReliëf, bumpScale: 0.12 });
       return {
-        skin: new THREE.MeshStandardMaterial({ color: look.huid, roughness: 0.58 }),
-        gezicht: new THREE.MeshStandardMaterial({ color: look.huid, roughness: 0.52, vertexColors: true }),
+        skin: new THREE.MeshStandardMaterial({ color: look.huid, roughness: 0.5, emissive: look.huid, emissiveIntensity: 0.035 }),
+        gezicht2: new THREE.MeshStandardMaterial({ color: look.huid, roughness: 0.46, emissive: look.huid, emissiveIntensity: 0.035 }),
+        neusgat: new THREE.MeshStandardMaterial({ color: new THREE.Color(look.huid).multiplyScalar(0.42), roughness: 0.8 }),
+        lip: new THREE.MeshStandardMaterial({ color: new THREE.Color(look.huid).lerp(new THREE.Color('#b2574f'), 0.62), roughness: 0.38 }),
+        lid: new THREE.MeshStandardMaterial({ color: look.huid, roughness: 0.5, emissive: look.huid, emissiveIntensity: 0.035, side: THREE.DoubleSide }),
+        gezicht: new THREE.MeshStandardMaterial({ color: look.huid, roughness: 0.46, vertexColors: true, emissive: look.huid, emissiveIntensity: 0.035 }),
         hair: new THREE.MeshStandardMaterial({ color: look.haar, roughness: 0.65 }),
-        haarBasis: new THREE.MeshStandardMaterial({ color: new THREE.Color(look.haar).multiplyScalar(0.5), roughness: 0.9 }),
+        haarBasis: new THREE.MeshStandardMaterial({ color: new THREE.Color(look.haar).multiplyScalar(0.62), roughness: 0.7 }),
         pants: stof(look.broek, 0.88),
         shirt: stof(look.hemd, 0.8),
         top: stof(look.topKleur, look.top === 'colbert' ? 0.72 : 0.92),
@@ -188,9 +194,10 @@ export function Character({ id, name, shirt, mood, pose = 'zit', working, label,
         dark: new THREE.MeshStandardMaterial({ color: '#141414', roughness: 0.3 }),
         accent: new THREE.MeshStandardMaterial({ color: shirt, roughness: 0.5 }),
         iris: new THREE.MeshStandardMaterial({ color: look.ogen, roughness: 0.22 }),
-        wenkbrauw: new THREE.MeshStandardMaterial({ color: new THREE.Color(look.haar).multiplyScalar(0.7), roughness: 0.8 }),
+        wenkbrauw: new THREE.MeshStandardMaterial({ color: new THREE.Color(look.haar).multiplyScalar(0.72), roughness: 0.7 }),
         koord: new THREE.MeshStandardMaterial({ color: '#d9d6cf', roughness: 0.8 }),
         knoop: new THREE.MeshStandardMaterial({ color: '#2b2622', roughness: 0.4 }),
+        knoopWit: new THREE.MeshStandardMaterial({ color: '#c9c5bd', roughness: 0.4 }),
         riem: new THREE.MeshStandardMaterial({ color: '#17120e', roughness: 0.45 }),
       };
     },
@@ -210,37 +217,74 @@ export function Character({ id, name, shirt, mood, pose = 'zit', working, label,
   const phase = (h % 1000) / 160;
   const benen = useRef<(THREE.Group | null)[]>([]);
   const knieen = useRef<(THREE.Group | null)[]>([]);
-  useFrame(({ clock }) => {
+  const voeten = useRef<(THREE.Group | null)[]>([]);
+  const leden = useRef<(THREE.Mesh | null)[]>([]);
+  const bekken = useRef<THREE.Group>(null);
+  const fase = useRef(phase);
+  useFrame(({ clock }, rawDt) => {
+    const dt = Math.min(rawDt, 0.1);
     const t = clock.elapsedTime + phase;
     const l = loop?.current ?? 0;
-    if (loop) {
-      // Stappen: benen en armen tegengesteld, de knie plooit als het been naar achteren gaat.
-      const ritme = t * (7 + l * 3.2);
-      benen.current.forEach((b, i) => {
-        if (b) b.rotation.x = Math.sin(ritme + i * Math.PI) * 0.62 * Math.min(1.25, l);
-      });
-      knieen.current.forEach((k, i) => {
-        if (k) k.rotation.x = -Math.max(0, Math.sin(ritme + i * Math.PI - 0.9)) * 0.85 * Math.min(1.25, l);
-      });
-      if (body.current) body.current.position.y = hipY + Math.abs(Math.sin(ritme)) * 0.022 * Math.min(1.25, l);
-    }
-    if (body.current) body.current.scale.y = 1 + Math.sin(t * 1.6) * 0.004; // ademen
+    const w = Math.min(1, l);
+    // Knipperen, om de paar seconden.
+    const knip = (t * 0.23 + phase) % 1 < 0.028;
+    leden.current.forEach((m) => {
+      if (m) m.scale.y = knip ? 0.98 : 0.36;
+    });
+    if (body.current) body.current.scale.y = 1 + Math.sin(t * 1.6) * 0.005; // ademen
     if (head.current) {
-      head.current.rotation.y = working ? Math.sin(t * 0.6) * 0.1 : Math.sin(t * 0.35) * 0.28;
-      head.current.rotation.x = working ? 0.12 : 0;
+      // Stilstaan: rustig rondkijken. Lopen: recht vooruit.
+      head.current.rotation.y = working ? Math.sin(t * 0.6) * 0.1 : (Math.sin(t * 0.35) * 0.3 + Math.sin(t * 0.13) * 0.14) * (1 - w);
+      head.current.rotation.x = working ? 0.12 : Math.sin(t * 0.27) * 0.04 * (1 - w);
     }
-    arms.forEach(([a, f], i) => {
-      if (!a.current || !f.current) return;
-      if (sit) {
+    if (sit) {
+      arms.forEach(([a, f], i) => {
+        if (!a.current || !f.current) return;
         // Bovenarm iets naar voren, onderarm naar het toetsenbord. Positieve x = naar voren (kijkt naar -z).
         a.current.rotation.x = 0.35;
         f.current.rotation.x = 1.2 + (working ? Math.sin(t * 13 + i * 1.7) * 0.06 : 0);
-      } else {
-        // Armen zwaaien mee met het tegengestelde been.
-        const zwaai = loop && l > 0.02 ? Math.sin(t * (7 + l * 3.2) + i * Math.PI + Math.PI) * 0.55 * Math.min(1.25, l) : Math.sin(t * 1.1 + i) * 0.04;
-        a.current.rotation.x = zwaai;
-        f.current.rotation.x = 0.15 + (loop ? l * 0.45 : 0);
-      }
+      });
+      return;
+    }
+    // Loopcyclus. De paslengte past bij de snelheid, zodat de voeten niet over de vloer glijden.
+    const hoek = l <= 1 ? 0.42 * l : 0.42 + (l - 1) * 0.18;
+    const omega = 8.4 + Math.max(0, l - 1) * 3.6;
+    fase.current += dt * omega;
+    const p = fase.current;
+    let bereik = 0;
+    for (let i = 0; i < 2; i++) {
+      const si = p + i * Math.PI;
+      const dij = hoek * Math.sin(si) + 0.015;
+      // De knie plooit als het been naar voren zwaait (begin van de zwaaifase), en blijft licht gebogen bij het neerzetten.
+      const knie = w * (0.07 + (0.95 + Math.max(0, l - 1) * 0.5) * Math.max(0, Math.cos(si - 0.45)) ** 1.6);
+      const b = benen.current[i];
+      const k = knieen.current[i];
+      const v = voeten.current[i];
+      if (b) b.rotation.x = dij;
+      if (k) k.rotation.x = -knie;
+      // De voet blijft zo goed als vlak; achteraan komt de hiel los en bij het neerzetten de neus.
+      if (v) v.rotation.x = -(dij - knie) * 0.78;
+      bereik = Math.max(bereik, 0.43 * Math.cos(dij) + 0.44 * Math.cos(dij - knie));
+    }
+    if (bekken.current) {
+      // De hoogte volgt het steunbeen: zo blijft er altijd een voet op de grond.
+      bekken.current.position.y = hipY + (bereik - 0.87);
+      bekken.current.rotation.y = -Math.sin(p) * 0.1 * w;
+      bekken.current.rotation.z = Math.cos(p) * 0.03 * w + Math.sin(t * 0.41) * 0.012 * (1 - w);
+      bekken.current.position.x = Math.cos(p) * 0.014 * w + Math.sin(t * 0.41) * 0.014 * (1 - w); // gewicht verleggen
+    }
+    if (body.current) {
+      // Schouders draaien tegen het bekken in, en bij het rennen leun je voorover.
+      body.current.rotation.y = Math.sin(p) * 0.2 * w;
+      body.current.rotation.x = -0.02 * w - Math.max(0, l - 1) * 0.1;
+      body.current.rotation.z = -Math.cos(p) * 0.018 * w;
+    }
+    arms.forEach(([a, f], i) => {
+      if (!a.current || !f.current) return;
+      const zwaai = -Math.sin(p + i * Math.PI);
+      a.current.rotation.x = zwaai * (0.42 + Math.max(0, l - 1) * 0.3) * w + 0.03 + Math.sin(t * 1.1 + i) * 0.015 * (1 - w);
+      // Ellebogen plooien meer als de arm naar voren zwaait.
+      f.current.rotation.x = 0.16 + (0.28 + Math.max(0, zwaai) * 0.36 + Math.max(0, l - 1) * 0.7) * w;
     });
   });
 
@@ -286,13 +330,14 @@ export function Character({ id, name, shirt, mood, pose = 'zit', working, label,
         document.body.style.cursor = '';
       }}
     >
+      <group ref={bekken} position-y={hipY}>
       {/* Benen */}
       {[-0.088, 0.088].map((x, bi) => (
-        <group key={x} ref={(el) => (benen.current[bi] = el)} position={[x, hipY - 0.02, 0]} rotation-x={sit ? Math.PI / 2 : 0}>
+        <group key={x} ref={(el) => (benen.current[bi] = el)} position={[x, -0.02, 0]} rotation-x={sit ? Math.PI / 2 : 0}>
           <mesh geometry={vormen.broekDij} material={mats.pants} castShadow />
           <group ref={(el) => (knieen.current[bi] = el)} position-y={-0.43} rotation-x={sit ? -Math.PI / 2 : 0}>
             <mesh geometry={vormen.broekKuit} material={mats.pants} castShadow />
-            <group position={[0, -0.44, -0.04]}>
+            <group ref={(el) => (voeten.current[bi] = el)} position={[0, -0.44, -0.04]}>
               <mesh geometry={schoenBoven} material={mats.shoe} castShadow />
               <mesh geometry={schoenZool} material={mats.zool} />
             </group>
@@ -300,7 +345,7 @@ export function Character({ id, name, shirt, mood, pose = 'zit', working, label,
         </group>
       ))}
 
-      <group ref={body} position-y={hipY}>
+      <group ref={body}>
         <mesh geometry={hipsGeo} material={mats.pants} />
         {/* Riem */}
         {look.top !== 'hoodie' && (
@@ -317,6 +362,17 @@ export function Character({ id, name, shirt, mood, pose = 'zit', working, label,
             <mesh position={[0, 0.455, -0.1215]} rotation-y={Math.PI} material={mats.shirt}>
               <shapeGeometry args={[VHALS]} />
             </mesh>
+            <mesh position={[0, 0.552, -0.004]} scale={[1, 1, 0.98]} material={mats.shirt}>
+              <cylinderGeometry args={[0.061, 0.092, 0.075, 18]} />
+            </mesh>
+            <mesh position={[0, 0.535, -0.062]} scale={[0.082, 0.05, 0.064]} material={mats.shirt}>
+              <sphereGeometry args={[1, 16, 10]} />
+            </mesh>
+            {[0.415, 0.345, 0.275].map((y) => (
+              <mesh key={y} position={[0, y, -0.1222]} rotation-x={Math.PI / 2} material={mats.knoopWit}>
+                <cylinderGeometry args={[0.0042, 0.0042, 0.002, 10]} />
+              </mesh>
+            ))}
             {[-1, 1].map((sd) => (
               <group key={sd}>
                 <mesh position={[sd * 0.067, 0.395, -0.1235]} rotation={[0, sd * 0.18, sd * -0.24]} material={mats.top}>
@@ -379,6 +435,13 @@ export function Character({ id, name, shirt, mood, pose = 'zit', working, label,
             <boxGeometry args={[0.045, 0.06, 0.006]} />
           </mesh>
         )}
+        {/* Schouders, zodat romp en armen in elkaar overlopen */}
+        {look.top !== 'hemd' &&
+          [-1, 1].map((sd) => (
+            <mesh key={sd} position={[sd * 0.15, 0.5, 0]} scale={[0.078, 0.047, 0.06]} rotation-z={sd * -0.3} material={mats.top}>
+              <sphereGeometry args={[1, 16, 12]} />
+            </mesh>
+          ))}
         {/* Armen */}
         {[-1, 1].map((side, i) => (
           <group key={side} ref={arms[i][0]} position={[side * 0.19, 0.5, 0]} rotation-z={side * 0.075}>
@@ -390,50 +453,88 @@ export function Character({ id, name, shirt, mood, pose = 'zit', working, label,
                   <cylinderGeometry args={[0.031, 0.031, 0.03, 12]} />
                 </mesh>
               )}
-              <mesh position-y={-0.262} geometry={side < 0 ? handen.l : handen.r} material={mats.skin} castShadow />
+              <mesh position-y={-0.255} rotation-y={side * (Math.PI / 2 - 0.25)} geometry={side < 0 ? handen.l : handen.r} material={mats.skin} castShadow />
             </group>
           </group>
         ))}
         {/* Nek en hoofd */}
-        <mesh position={[0, 0.595, 0.004]} material={mats.skin}>
-          <cylinderGeometry args={[0.054, 0.062, 0.11, 16]} />
+        <mesh position={[0, 0.6, 0.004]} material={mats.skin}>
+          <cylinderGeometry args={[0.056, 0.064, 0.13, 16]} />
         </mesh>
-        <group ref={head} position-y={0.74} scale={1.09}>
+        <group ref={head} position-y={0.75} scale={1.13}>
           <mesh geometry={hoofdGeo} material={mats.gezicht} castShadow />
           {[-1, 1].map((sd) => (
             <group key={sd}>
-              {/* Oog: wit, iris, pupil en een bovenooglid */}
-              <group position={[sd * 0.038, 0.0165, -0.0815]}>
+              {/* Groot oog: wit, iris, pupil, lichtje, ooglid en wimpers */}
+              <group position={[sd * 0.041, 0.008, -0.0852]} rotation-y={sd * -0.12} scale={1.14}>
                 <mesh material={OOG_WIT}>
-                  <sphereGeometry args={[0.0132, 14, 12]} />
+                  <sphereGeometry args={[0.0158, 18, 14]} />
                 </mesh>
-                <mesh position-z={-0.0105} scale={[1, 1, 0.42]} material={mats.iris}>
-                  <sphereGeometry args={[0.0074, 14, 12]} />
+                <mesh position-z={-0.0118} scale={[1, 1, 0.45]} material={mats.iris}>
+                  <sphereGeometry args={[0.0098, 18, 14]} />
                 </mesh>
-                <mesh position-z={-0.0133} scale={[1, 1, 0.3]} material={PUPIL}>
-                  <sphereGeometry args={[0.0036, 10, 8]} />
+                <mesh position-z={-0.0153} scale={[1, 1, 0.3]} material={PUPIL}>
+                  <sphereGeometry args={[0.0048, 12, 10]} />
                 </mesh>
-                <mesh position={[0, 0.0088, -0.004]} rotation-x={0.25} scale={[1.14, 0.42, 1.1]} material={mats.skin}>
-                  <sphereGeometry args={[0.0136, 12, 8]} />
+                <mesh position={[0.0034, 0.0038, -0.0167]} material={LICHTJE}>
+                  <sphereGeometry args={[0.0017, 8, 6]} />
+                </mesh>
+                <mesh ref={(el) => (leden.current[sd < 0 ? 0 : 1] = el)} position={[0, 0.0065, -0.002]} scale={[1.1, 0.36, 1.1]} material={mats.lid}>
+                  <sphereGeometry args={[0.0163, 16, 10, 0, Math.PI * 2, 0, Math.PI * 0.62]} />
+                </mesh>
+                <mesh position={[0, 0.0005, -0.0092]} rotation-z={Math.PI * 0.11} material={WIMPER}>
+                  <torusGeometry args={[0.0145, 0.00135, 6, 16, Math.PI * 0.78]} />
                 </mesh>
               </group>
-              <mesh position={[sd * 0.039, 0.0425, -0.0915]} rotation={[0, sd * -0.2, Math.PI / 2 + sd * 0.08]} scale={[0.42, 1, 0.42]} material={mats.wenkbrauw}>
-                <capsuleGeometry args={[0.0085, 0.03, 4, 8]} />
+              <mesh position={[sd * 0.041, 0.0385, -0.0955]} rotation={[0.05, sd * -0.15, Math.PI / 2 + sd * 0.1]} scale={[0.55, 1, 0.42]} material={mats.wenkbrauw}>
+                <capsuleGeometry args={[0.0078, 0.03, 4, 8]} />
               </mesh>
               <mesh position={[sd * 0.0955, 0.002, 0.003]} rotation-y={sd * 0.25} geometry={oorGeo} material={mats.skin} />
             </group>
           ))}
+          {/* Neus */}
+          <mesh position={[0, -0.0235, -0.1035]} scale={[0.0125, 0.0105, 0.0115]} material={mats.gezicht2}>
+            <sphereGeometry args={[1, 14, 10]} />
+          </mesh>
+          {[-1, 1].map((sd) => (
+            <group key={sd}>
+              <mesh position={[sd * 0.0108, -0.0265, -0.0985]} scale={[0.0072, 0.0062, 0.0072]} material={mats.gezicht2}>
+                <sphereGeometry args={[1, 10, 8]} />
+              </mesh>
+              <mesh position={[sd * 0.0058, -0.0322, -0.1035]} scale={[0.0028, 0.0016, 0.002]} material={mats.neusgat}>
+                <sphereGeometry args={[1, 8, 6]} />
+              </mesh>
+            </group>
+          ))}
+          {/* Mond: bovenlip, onderlip en een lichte glimlach */}
+          <group position={[0, -0.0615, -0.0925]}>
+            {[-1, 1].map((sd) => (
+              <group key={sd}>
+                <mesh position={[sd * 0.0118, 0.0034, 0.0005]} rotation-z={Math.PI / 2 + sd * 0.26} scale={[0.5, 1, 0.5]} material={mats.lip}>
+                  <capsuleGeometry args={[0.0042, 0.019, 4, 10]} />
+                </mesh>
+                <mesh position={[sd * 0.0232, 0.0075, 0.0015]} scale={[0.0026, 0.0018, 0.0018]} material={mats.neusgat}>
+                  <sphereGeometry args={[1, 8, 6]} />
+                </mesh>
+              </group>
+            ))}
+            <mesh position={[0, -0.0024, -0.0002]} scale={[0.0165, 0.0042, 0.0042]} material={mats.lip}>
+              <sphereGeometry args={[1, 16, 10]} />
+            </mesh>
+          </group>
           {/* Korte basis onder de lokken, zodat de hoofdhuid niet door het haar schijnt */}
-          <mesh rotation-x={0.5} scale={[0.93, 1.17, 1.02]} material={mats.haarBasis}>
-            <sphereGeometry args={[0.1045, 24, 12, 0, Math.PI * 2, 0, Math.PI * 0.5]} />
+          <mesh rotation-x={0.42} scale={[0.96, 1.17, 1.03]} material={mats.haarBasis}>
+            <sphereGeometry args={[0.1055, 28, 14, 0, Math.PI * 2, 0, Math.PI * 0.5]} />
           </mesh>
           <Haar stijl={look.stijl} kleur={look.haar} seed={h} />
         </group>
       </group>
 
-      {!zonderDiamant && <Plumbob mood={mood} y={hipY + 1.08} />}
+      </group>
+
+      {!zonderDiamant && <Plumbob mood={mood} y={hipY + 1.16} />}
       {(label || hover || selected) && (
-        <Billboard position-y={hipY + 1.24}>
+        <Billboard position-y={hipY + 1.32}>
           <Text font={FONT} fontSize={big ? 0.15 : 0.12} color="#ffffff" outlineWidth={0.016} outlineColor="#0b1526" anchorY="bottom">
             {name}
           </Text>
