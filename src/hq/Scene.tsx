@@ -12,6 +12,9 @@ import { Warehouse, officeSlot, zoneKind, zoneView } from './world/Warehouse';
 import { Parking } from './world/Cars';
 import { B } from './world/dims';
 import { Walker } from './world/Walker';
+import { MijnAvatar, Spelers } from './world/Avatar';
+import { PingPongSpel } from './world/PingPongSpel';
+import { PoolSpel } from './world/PoolSpel';
 
 const v = (p: [number, number, number]) => new THREE.Vector3(p[0], p[1], p[2] + B.Z);
 
@@ -166,6 +169,10 @@ export function HqScene({ onReady }: { onReady?: () => void }) {
       />
       <CameraRig />
       <Walker />
+      <MijnAvatar />
+      <Spelers />
+      <PingPongSpel />
+      <PoolSpel />
       <FirstFrames onReady={onReady} />
       <ShadowThrottle />
     </Canvas>

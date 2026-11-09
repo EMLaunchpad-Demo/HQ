@@ -22,6 +22,7 @@ import {
   SLUIT_VERLOPEN,
   teSluiten,
   valideerBericht,
+  valideerWereld,
 } from './kantoor-logica.js';
 
 const TAKEN_DB = '3f1d13408f3180a6905ed38d259f8345';
@@ -455,6 +456,13 @@ export class Kantoor extends DurableObject {
     // Login verlopen: geen berichten meer, de verbinding gaat dicht.
     if (Number.isFinite(ik.tot) && Date.now() > ik.tot) {
       if (this.sluitVerlopen()) this.broadcast();
+      return;
+    }
+    // Posities en spelzetten: gewoon doorgeven aan de anderen, er wordt niets bewaard.
+    const wereld = valideerWereld(raw);
+    if (wereld) {
+      const msg = JSON.stringify({ event: 'wereld', data: { van: ik.wie, ...wereld } });
+      for (const v of this.verbindingen()) if (v.a.sid !== ik.sid) stuur(v.ws, msg);
       return;
     }
     const bericht = valideerBericht(raw, ik.wie, founderIds(this.env));

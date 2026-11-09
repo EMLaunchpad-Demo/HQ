@@ -1,5 +1,6 @@
 // Inrichting voor de ontspanning in het HQ: gaming, biljart, pingpong en salon.
 import { useMemo } from 'react';
+import { useSpel } from '../spel/store';
 import * as THREE from 'three';
 import { RoundedBox } from '@react-three/drei';
 import { brandGradientTex } from '../textures';
@@ -31,24 +32,6 @@ export function PoolTable() {
           </mesh>
         )),
       )}
-      {/* Ballen in een driehoek en de witte bal */}
-      {Array.from({ length: 10 }, (_, i) => {
-        const row = Math.floor((Math.sqrt(8 * i + 1) - 1) / 2);
-        const col = i - (row * (row + 1)) / 2;
-        return (
-          <mesh key={i} position={[0.55 + row * 0.052, 0.92, (col - row / 2) * 0.06]}>
-            <sphereGeometry args={[0.028, 14, 10]} />
-            <meshPhysicalMaterial color={['#f2c200', '#1d4ed8', '#c0262d', '#5b2a86', '#e86a14', '#0f7a3a', '#7a1f1f', '#111111', '#f2c200', '#1d4ed8'][i]} roughness={0.15} clearcoat={1} />
-          </mesh>
-        );
-      })}
-      <mesh position={[-0.7, 0.92, 0]}>
-        <sphereGeometry args={[0.028, 14, 10]} />
-        <meshPhysicalMaterial color="#f5f3ee" roughness={0.15} clearcoat={1} />
-      </mesh>
-      <mesh position={[-0.3, 0.93, 0.25]} rotation={[0, 0.3, Math.PI / 2 - 0.05]} material={M.oak}>
-        <cylinderGeometry args={[0.008, 0.015, 1.45, 8]} />
-      </mesh>
       {/* Hanglamp */}
       <mesh position-y={1.9} material={M.black}>
         <boxGeometry args={[1.8, 0.12, 0.3]} />
@@ -62,6 +45,7 @@ export function PoolTable() {
 }
 
 export function PingPong() {
+  const bezig = useSpel((x) => x.ppActief);
   return (
     <group>
       <mesh position-y={0.76} material={M.feltBlue} castShadow>
@@ -79,6 +63,8 @@ export function PingPong() {
           <boxGeometry args={[0.06, 0.74, 1.2]} />
         </mesh>
       ))}
+      {/* Batjes en bal op de tafel, tot er iemand speelt */}
+      <group visible={!bezig} userData={{ noMerge: true, noCollide: true }}>
       {[-0.6, 0.7].map((x, i) => (
         <group key={x} position={[x, 0.79, i ? -0.3 : 0.35]} rotation-y={i ? 0.6 : -0.4}>
           <mesh rotation-x={-Math.PI / 2}>
@@ -94,6 +80,7 @@ export function PingPong() {
         <sphereGeometry args={[0.02, 12, 8]} />
         <meshStandardMaterial color="#ff9a2e" />
       </mesh>
+      </group>
     </group>
   );
 }

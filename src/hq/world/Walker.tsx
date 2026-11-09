@@ -1,12 +1,18 @@
-// Rondlopen in het HQ als mens: ooghoogte, kijken met de muis, lopen met de toetsen, botsen, trappen en vallen.
+// Rondlopen in het HQ met je eigen mannetje: camera over je schouder (V = eigen ogen), kijken met de muis,
+// lopen met de toetsen, botsen, trappen en vallen. E = spel starten aan een tafel, T = bellen naar wie naast je staat.
 import { useEffect, useRef } from 'react';
 import * as THREE from 'three';
 import { useFrame, useThree } from '@react-three/fiber';
 import type { OrbitControls as OrbitImpl } from 'three-stdlib';
+import { call, useCall } from '../call';
+import { startSpel, type SpelSoort } from '../spel/store';
 import { ui, useUi } from '../ui';
-import { Botsingen, bouwBotsingen, walkPos, type Blok } from '../walk';
+import { Botsingen, bouwBotsingen, walkHoofd, walkPos, type Blok } from '../walk';
 import { maakLos, voegSamen, type Batch } from '../walkBatch';
+import { alleSpelers, zendPositie, zendWeg } from '../wereld';
 import { B } from './dims';
+import { PP_PLEK } from './PingPongSpel';
+import { POOL_PLEK } from './PoolSpel';
 import { walkLabel, walkSpawn } from './Warehouse';
 
 const EYE = 1.68;
@@ -41,9 +47,23 @@ export function vraagMuis() {
   }
 }
 
+function hoekNaar(van: number, naar: number, k: number) {
+  let d = naar - van;
+  while (d > Math.PI) d -= Math.PI * 2;
+  while (d < -Math.PI) d += Math.PI * 2;
+  return van + d * k;
+}
+
+/** Hoe ver mag de camera achter je staan zonder door een muur te gaan? */
+function vrijeAfstand(c: Botsingen, hx: number, hy: number, hz: number, dx: number, dy: number, dz: number) {
+  for (let d = 0.35; d < walkHoofd.camMax; d += 0.12) if (c.raakt(hx - dx * d, hy - dy * d, hz - dz * d)) return Math.max(0.2, d - 0.22);
+  return walkHoofd.camMax;
+}
+
 export function Walker() {
   const walk = useUi((s) => s.walk);
   const spot = useUi((s) => s.walkSpot);
+  const me = useCall((s) => s.me);
   const camera = useThree((s) => s.camera) as THREE.PerspectiveCamera;
   const gl = useThree((s) => s.gl);
   const scene = useThree((s) => s.scene);
@@ -54,7 +74,7 @@ export function Walker() {
   const frames = useRef(0);
   const keys = useRef(new Set<string>());
   const yaw = useRef(0);
-  const pitch = useRef(0);
+  const pitch = useRef(-0.12);
   const vel = useRef(new THREE.Vector2());
   const fall = useRef(0);
   const eyeY = useRef(EYE);
@@ -62,6 +82,9 @@ export function Walker() {
   const saved = useRef<{ fov: number; near: number; far: number } | null>(null);
   const label = useRef('');
   const batch = useRef<Batch | null>(null);
+  const hintTel = useRef(0);
+  const meRef = useRef(me);
+  meRef.current = me;
 
   // Naar een plek gaan (bij het starten en vanuit het menu).
   useEffect(() => {
@@ -69,9 +92,11 @@ export function Walker() {
     const s = walkSpawn(spot.split('#')[0]);
     walkPos.set(s.x, s.y, s.z);
     yaw.current = s.yaw;
-    pitch.current = 0;
+    walkHoofd.ry = s.yaw;
+    pitch.current = -0.12;
     vel.current.set(0, 0);
     eyeY.current = s.y + EYE;
+    walkHoofd.camAfstand = walkHoofd.camMax;
   }, [walk, spot]);
 
   useEffect(() => {
@@ -92,6 +117,12 @@ export function Walker() {
       if ((e.target as HTMLElement)?.tagName === 'INPUT') return;
       held.add(e.code);
       if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'].includes(e.code)) e.preventDefault();
+      if (e.repeat) return;
+      const s = ui.get();
+      if (s.spel || s.walkPaused) return;
+      if (e.code === 'KeyV') ui.set({ walkView: s.walkView === 'derde' ? 'eerste' : 'derde' });
+      if (e.code === 'KeyE' && (s.walkHint === 'pingpong' || s.walkHint === 'pool')) startSpel(s.walkHint as SpelSoort);
+      if (e.code === 'KeyT' && s.walkHint.startsWith('bel:')) void call(s.walkHint.slice(4));
     };
     const up = (e: KeyboardEvent) => held.delete(e.code);
     const blur = () => held.clear();
@@ -99,18 +130,24 @@ export function Walker() {
       // Grote sprongen in de muisbeweging (bekend in Chrome op Windows) negeren.
       if (Math.abs(dx) > 250 || Math.abs(dy) > 250) return;
       yaw.current -= dx * SENS;
-      pitch.current = Math.max(-1.45, Math.min(1.45, pitch.current - dy * SENS));
+      const eerste = ui.get().walkView === 'eerste';
+      pitch.current = Math.max(eerste ? -1.45 : -1.05, Math.min(eerste ? 1.45 : 0.55, pitch.current - dy * SENS));
     };
     const move = (e: MouseEvent) => {
+      if (ui.get().spel) return;
       if (document.pointerLockElement === gl.domElement) look(e.movementX, e.movementY);
       else if (ui.get().walkDrag && !ui.get().walkPaused && e.buttons & 1) look(e.movementX, e.movementY);
     };
     const lock = () => {
       const on = document.pointerLockElement === gl.domElement;
       if (on) ui.set({ walkDrag: false, walkPaused: false });
-      else if (ui.get().walk && !ui.get().walkDrag) ui.set({ walkPaused: true }); // Esc haalt de muis terug
+      else if (ui.get().walk && !ui.get().walkDrag && !ui.get().spel) ui.set({ walkPaused: true }); // Esc haalt de muis terug
       held.clear();
     };
+    const wiel = (e: WheelEvent) => {
+      if (!ui.get().spel) walkHoofd.camMax = Math.max(0.9, Math.min(5, walkHoofd.camMax + e.deltaY * 0.002));
+    };
+    window.addEventListener('wheel', wiel, { passive: true });
     window.addEventListener('keydown', down);
     window.addEventListener('keyup', up);
     window.addEventListener('blur', blur);
@@ -120,19 +157,23 @@ export function Walker() {
     if (import.meta.env.DEV)
       Object.assign(window, {
         hqWalk: {
-          naar: (x: number, y: number, z: number, y2 = 0, p = 0) => {
+          naar: (x: number, y: number, z: number, y2 = 0, p = -0.12) => {
             walkPos.set(x, y, z);
             eyeY.current = y + EYE;
             yaw.current = y2;
+            walkHoofd.ry = y2;
             pitch.current = p;
           },
           stand: () => ({ x: walkPos.x, y: walkPos.y, z: walkPos.z, yaw: yaw.current, blokken: col.current?.aantal ?? 0 }),
           botsingen: () => col.current,
           toets: (c: string, aan: boolean) => (aan ? held.add(c) : held.delete(c)),
+          draai: (r: number) => (walkHoofd.ry = r),
+          zoom: (d: number) => (walkHoofd.camMax = d),
         },
       });
 
     return () => {
+      window.removeEventListener('wheel', wiel);
       window.removeEventListener('keydown', down);
       window.removeEventListener('keyup', up);
       window.removeEventListener('blur', blur);
@@ -158,6 +199,7 @@ export function Walker() {
         const fw = new THREE.Vector3(-Math.sin(yaw.current), 0, -Math.cos(yaw.current));
         controls.target.copy(cam.position).addScaledVector(fw, 4);
       }
+      if (meRef.current) zendWeg();
     };
   }, [walk, camera, gl, scene, setEvents, controls]);
 
@@ -177,7 +219,16 @@ export function Walker() {
       }
     }
     const c = col.current;
-    const { walkPaused } = ui.get();
+    const { walkPaused, spel, walkView } = ui.get();
+    const eerste = walkView === 'eerste';
+
+    // Aan een speltafel doet het spel de camera en de plaats van je mannetje.
+    if (spel) {
+      if (meRef.current) zendPositie(walkPos.x, walkPos.y, walkPos.z, walkHoofd.ry, walkHoofd.snel);
+      vel.current.set(0, 0);
+      return;
+    }
+
     const k = keys.current;
     let fwd = 0;
     let str = 0;
@@ -188,7 +239,8 @@ export function Walker() {
       if (k.has('KeyD') || k.has('ArrowRight')) str += 1;
       if (k.has('KeyA') || k.has('ArrowLeft')) str -= 1;
     }
-    const speed = k.has('ShiftLeft') || k.has('ShiftRight') ? RUN : WALK;
+    const run = k.has('ShiftLeft') || k.has('ShiftRight');
+    const speed = run ? RUN : WALK;
     const norm = Math.hypot(fwd, str) || 1;
     const sin = Math.sin(yaw.current);
     const cos = Math.cos(yaw.current);
@@ -211,6 +263,16 @@ export function Walker() {
         c.push(walkPos, walkPos.y);
       }
     }
+    // Je loopt niet door een collega heen.
+    for (const s of alleSpelers()) {
+      const dx = walkPos.x - s.x;
+      const dz = walkPos.z - s.z;
+      const d = Math.hypot(dx, dz);
+      if (d < 0.55 && d > 0.001 && Math.abs(s.y - walkPos.y) < 1) {
+        walkPos.x += (dx / d) * (0.55 - d);
+        walkPos.z += (dz / d) * (0.55 - d);
+      }
+    }
     walkPos.x = Math.max(-LIMIT, Math.min(LIMIT, walkPos.x));
     walkPos.z = Math.max(-LIMIT, Math.min(LIMIT, walkPos.z));
     if (c) {
@@ -225,17 +287,52 @@ export function Walker() {
       }
     }
 
-    // Camera: treden uitvlakken en een heel lichte hoofdbeweging tijdens het stappen.
-    const moving = Math.min(1, Math.hypot(vel.current.x, vel.current.y) / WALK);
-    bob.current += dt * (speed === RUN ? 11 : 8.2) * moving;
+    // Je mannetje draait zich naar waar het heen loopt; in first person kijkt het waar jij kijkt.
+    const v = Math.hypot(vel.current.x, vel.current.y);
+    if (eerste) walkHoofd.ry = yaw.current;
+    else if (v > 0.15) walkHoofd.ry = hoekNaar(walkHoofd.ry, Math.atan2(-vel.current.x, -vel.current.y), 1 - Math.exp(-dt * 11));
+    walkHoofd.snel = Math.min(1.6, v / WALK);
+
+    const moving = Math.min(1, v / WALK);
+    bob.current += dt * (run ? 11 : 8.2) * moving;
     eyeY.current += (walkPos.y + EYE - eyeY.current) * (1 - Math.exp(-dt * 14));
-    camera.position.set(walkPos.x + Math.cos(bob.current * 0.5) * 0.006 * moving, eyeY.current + Math.sin(bob.current) * 0.014 * moving, walkPos.z);
     camera.rotation.set(pitch.current, yaw.current, 0);
+    if (eerste) {
+      camera.position.set(walkPos.x + Math.cos(bob.current * 0.5) * 0.006 * moving, eyeY.current + Math.sin(bob.current) * 0.014 * moving, walkPos.z);
+    } else {
+      // Over de schouder, en dichterbij zodra er een muur achter je staat.
+      const cp = Math.cos(pitch.current);
+      const dx = -sin * cp;
+      const dy = Math.sin(pitch.current);
+      const dz = -cos * cp;
+      const hy = eyeY.current - 0.1;
+      const vrij = c ? vrijeAfstand(c, walkPos.x, hy, walkPos.z, dx, dy, dz) : walkHoofd.camMax;
+      walkHoofd.camAfstand = vrij < walkHoofd.camAfstand ? vrij : Math.min(vrij, walkHoofd.camAfstand + dt * 3);
+      const d = walkHoofd.camAfstand;
+      const schouder = 0.28 * Math.min(1, d / 2.9);
+      camera.position.set(walkPos.x - dx * d + cos * schouder, Math.max(0.25, hy - dy * d), walkPos.z - dz * d - sin * schouder);
+    }
 
     const l = walkLabel(walkPos.x, walkPos.y, walkPos.z);
     if (l !== label.current) {
       label.current = l;
       ui.set({ walkRoom: l });
+    }
+    if (meRef.current) zendPositie(walkPos.x, walkPos.y, walkPos.z, walkHoofd.ry, walkHoofd.snel);
+
+    // Waar sta je bij? Dan verschijnt wat je kan doen.
+    if (++hintTel.current % 10 === 0) {
+      let hint = '';
+      const bij = (p: { x: number; z: number }, hx: number, hz: number) => walkPos.y < 1 && Math.hypot(Math.max(0, Math.abs(walkPos.x - p.x) - hx), Math.max(0, Math.abs(walkPos.z - p.z) - hz)) < 1.3;
+      if (bij(PP_PLEK, 1.37, 0.77)) hint = 'pingpong';
+      else if (bij(POOL_PLEK, 1.35, 0.75)) hint = 'pool';
+      else
+        for (const s of alleSpelers())
+          if (Math.hypot(walkPos.x - s.x, walkPos.z - s.z) < 2.6 && Math.abs(walkPos.y - s.y) < 1.5) {
+            hint = `bel:${s.id}`;
+            break;
+          }
+      if (hint !== ui.get().walkHint) ui.set({ walkHint: hint });
     }
   });
   return null;

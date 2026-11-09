@@ -12,6 +12,7 @@ import { meldingenAanzetten, meldingenToestemming } from './bel';
 import { moodOf } from './world/Warehouse';
 import { MOOD_COLOR, type Mood } from './world/Character';
 import { vraagMuis } from './world/Walker';
+import { naamVan, stopSpel, useSpel } from './spel/store';
 
 const MOOD_LABEL: Record<Mood, string> = { bezig: 'Bezig', volgende: 'Volgende', open: 'Open taken', rust: 'Niets open', offline: 'Niet in het HQ' };
 const STATUS_COLOR: Record<string, string> = { 'In uitvoering': '#2ff0a6', Volgende: '#ffd23f', 'Niet gestart': '#7c8a97', Done: '#2f7bff' };
@@ -563,6 +564,7 @@ function startWalk() {
 }
 
 function stopWalk() {
+  stopSpel();
   const { walkSpot } = ui.get();
   ui.set({ walk: false, walkPaused: false, walkDrag: false });
   ui.go(floors.find((x) => x.id === walkSpot.split('#')[0])?.level ?? -1);
@@ -573,6 +575,21 @@ function WalkHud() {
   const room = useUi((s) => s.walkRoom);
   const paused = useUi((s) => s.walkPaused);
   const drag = useUi((s) => s.walkDrag);
+  const hint = useUi((s) => s.walkHint);
+  const spel = useUi((s) => s.spel);
+  const view = useUi((s) => s.walkView);
+  const melding = useUi((s) => s.walkMelding);
+  const tegen = useSpel((s) => s.tegen);
+  const zij = useSpel((s) => s.zij);
+  const score = useSpel((s) => s.score);
+  const tekst = useSpel((s) => s.tekst);
+  const hulp = useSpel((s) => s.hulp);
+  useEffect(() => {
+    if (!melding) return;
+    const t = setTimeout(() => ui.set({ walkMelding: '' }), 4000);
+    return () => clearTimeout(t);
+  }, [melding]);
+  const hintTekst = hint === 'pingpong' ? 'E = pingpong spelen' : hint === 'pool' ? 'E = pool spelen' : hint.startsWith('bel:') ? `T = videocall met ${nameOf(hint.slice(4))}` : '';
   const spring = (id: string) => {
     ui.set({ walkSpot: `${id}#${Date.now()}` });
     vraagMuis();
@@ -580,12 +597,28 @@ function WalkHud() {
   return (
     <>
       <div className="pointer-events-none fixed left-1/2 top-4 z-30 -translate-x-1/2 rounded-full px-4 py-1.5 text-[13px] font-semibold text-white" style={glass}>
-        {room || 'EM Launchpad HQ'}
+        {spel ? (
+          <span>
+            {spel === 'pingpong' ? `Jij ${score[zij]} - ${score[zij === 0 ? 1 : 0]} ${naamVan(tegen)}` : `Pool tegen ${naamVan(tegen)}`}
+          </span>
+        ) : (
+          room || 'EM Launchpad HQ'
+        )}
       </div>
-      {!paused && <div className="pointer-events-none fixed left-1/2 top-1/2 z-30 h-1 w-1 -translate-x-1/2 -translate-y-1/2 rounded-full" style={{ background: 'rgba(255,255,255,.75)', boxShadow: '0 0 3px rgba(0,0,0,.8)' }} />}
+      {spel && tekst && (
+        <div className="pointer-events-none fixed left-1/2 top-16 z-30 -translate-x-1/2 rounded-full px-4 py-1.5 text-[14px] font-semibold text-white" style={glass}>
+          {tekst}
+        </div>
+      )}
+      {!spel && !paused && (hintTekst || melding) && (
+        <div className="pointer-events-none fixed bottom-14 left-1/2 z-30 -translate-x-1/2 rounded-full px-4 py-2 text-[14px] font-semibold text-white" style={{ ...glass, border: '1px solid rgba(47,240,166,.55)' }}>
+          {melding || hintTekst}
+        </div>
+      )}
+      {!paused && !spel && view === 'eerste' && <div className="pointer-events-none fixed left-1/2 top-1/2 z-30 h-1 w-1 -translate-x-1/2 -translate-y-1/2 rounded-full" style={{ background: 'rgba(255,255,255,.75)', boxShadow: '0 0 3px rgba(0,0,0,.8)' }} />}
       {!paused && (
         <div className="pointer-events-none fixed bottom-4 left-1/2 z-30 -translate-x-1/2 rounded-full px-4 py-1.5 font-mono text-[10px] uppercase tracking-wider text-mid" style={glass}>
-          ZQSD of pijltjes = stappen · Shift = sneller · {drag ? 'slepen' : 'muis'} = kijken · Esc = menu
+          {spel ? hulp : `ZQSD of pijltjes = stappen · Shift = rennen · ${drag ? 'slepen' : 'muis'} = kijken · V = eigen ogen of over de schouder · Esc = menu`}
         </div>
       )}
       {drag && !paused && (
@@ -629,6 +662,14 @@ function useKeys() {
       if ((e.target as HTMLElement)?.tagName === 'INPUT') return;
       const { level, walk, walkPaused, walkDrag } = ui.get();
       if (walk) {
+        // Aan een speltafel: Esc stopt het spel en je loopt verder.
+        if (ui.get().spel) {
+          if (e.key === 'Escape') {
+            stopSpel();
+            vraagMuis();
+          }
+          return;
+        }
         // Met vergrendelde muis haalt de browser zelf de muis terug bij Esc; daarna sluit Esc het menu.
         if (e.key === 'Escape') {
           if (walkPaused) stopWalk();

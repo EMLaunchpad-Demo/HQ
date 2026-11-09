@@ -190,6 +190,39 @@ async function post(naar: string, soort: Soort, data: unknown = null, naarSid: s
   return !!r?.ok;
 }
 
+// --- Samen in het HQ: posities en spelzetten (zie wereld.ts) ---
+
+type WereldLuisteraar = (van: string, soort: string, d: Record<string, unknown>) => void;
+const wereldLuisteraars = new Set<WereldLuisteraar>();
+export function onWereld(f: WereldLuisteraar) {
+  wereldLuisteraars.add(f);
+  return () => void wereldLuisteraars.delete(f);
+}
+function opWereld(x: unknown) {
+  if (!isObj(x) || typeof x.van !== 'string' || typeof x.soort !== 'string' || !isObj(x.d)) return;
+  const { van, soort, d } = x;
+  wereldLuisteraars.forEach((f) => f(van, soort, d));
+}
+let wereldBezig = 0;
+/** Verstuurt iets naar iedereen in het HQ. Lukt het even niet, dan valt het weg: de volgende positie komt er zo aan. */
+export function stuurWereld(w: { soort: string; d: Record<string, unknown> }) {
+  if (!state.me) return;
+  if (ONLINE) {
+    if (ws?.readyState !== WebSocket.OPEN) return;
+    try {
+      ws.send(JSON.stringify({ wereld: w }));
+    } catch {
+      /* de verbinding komt vanzelf terug */
+    }
+    return;
+  }
+  if (!mijnSid || wereldBezig > 6) return;
+  wereldBezig++;
+  void fetch('/hq/signaal', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ wereld: w, van: state.me, vanSid: mijnSid }) })
+    .catch(() => null)
+    .finally(() => wereldBezig--);
+}
+
 // --- Wie ben je, en aanwezig zijn ---
 
 /** Online: wie ben je volgens de login? 'verlopen' = niet (meer) ingelogd, 'fout' = even geen verbinding. */
@@ -299,6 +332,7 @@ function connectPresence() {
   });
   source.addEventListener('verhuisd', (m) => opVerhuisd(leesJson((m as MessageEvent).data)));
   source.addEventListener('aanwezig', (m) => zetAanwezig(leesJson((m as MessageEvent).data)));
+  source.addEventListener('wereld', (m) => opWereld(leesJson((m as MessageEvent).data)));
   source.addEventListener('bericht', (m) => {
     const b = leesBericht(leesJson((m as MessageEvent).data));
     if (b) void onMessage(b);
@@ -391,6 +425,7 @@ function opVerhuisd(x: unknown) {
 function onSocketBericht(x: unknown) {
   if (!isObj(x)) return;
   if (x.event === 'aanwezig') return zetAanwezig(x.data);
+  if (x.event === 'wereld') return opWereld(x.data);
   if (x.event === 'welkom') return opWelkom(x.data);
   if (x.event === 'verhuisd') return opVerhuisd(x.data);
   if (x.event === 'niet-online') {

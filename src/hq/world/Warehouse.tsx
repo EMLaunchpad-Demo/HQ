@@ -22,6 +22,7 @@ import { B, ROOM_H, glassMat, steelMat } from './dims';
 import { CUT, CutContext, useCut, type Cut } from './cut';
 import { DOOR_H, GlassFront, SlideDoor } from './parts';
 import { walkPos } from '../walk';
+import { useSpelers } from '../wereld';
 
 const { W, D, H, RISE, MZ, MD } = B;
 const IX = W / 2 - MD; // binnenrand van de tussenverdieping (x)
@@ -110,7 +111,7 @@ export function officeSlot(officeId: string) {
 export function walkSpawn(spot: string): { x: number; y: number; z: number; yaw: number } {
   const at = (x: number, y: number, z: number, yaw: number) => ({ x, y, z: z + B.Z, yaw });
   const f = floors.find((x) => x.id === spot);
-  if (!f) return at(0, 0, D / 2 + 7, 0); // buiten, voor de voordeur
+  if (!f) return at(0, 0, D / 2 + 4, 0); // buiten, voor de voordeur
   const kind = zoneKind(f);
   if (kind === 'inkom') return at(-3.6, 0, 9.4, -0.35);
   if (kind === 'lounge') return at(0, 0, -2.6, 0);
@@ -173,6 +174,8 @@ interface Ctx {
   takenOk: boolean;
   /** Rondloopmodus: alles op volle detail en al het glas op zijn plaats. */
   walk: boolean;
+  /** Wie er nu rondloopt: die zit niet ook aan zijn bureau. */
+  loopt: string[];
 }
 
 const click = (id: string, level: number) => (e: ThreeEvent<MouseEvent>) => {
@@ -757,7 +760,7 @@ function WalnutOffice({ o, w, d, h, mood, ctx, online, doorSide }: { o: Occupant
         <group position-z={0.62}>
           <LeatherChair />
         </group>
-        {online && <Seat o={o} mood={mood} ctx={ctx} big />}
+        {online && !ctx.loopt.includes(o.id) && <Seat o={o} mood={mood} ctx={ctx} big />}
       </group>
       {/* Lederen fauteuil voor bezoekers, staande lamp en kunst aan de muur */}
       <group position={[2.6, 0, 1.2]} rotation-y={Math.PI + 0.5}>
@@ -848,7 +851,7 @@ function Office({ o, x, w, ctx, online }: { o: Occupant; x: number; w: number; c
       {!walnoot && (
         <group position={[0.4, 0, 0.3]} rotation-y={Math.PI - 0.6}>
           <Desk wide screen={MOOD_COLOR[mood]} lite={!ctx.active} />
-          {online && <Seat o={o} mood={mood} ctx={ctx} big />}
+          {online && !ctx.loopt.includes(o.id) && <Seat o={o} mood={mood} ctx={ctx} big />}
         </group>
       )}
       <Text font={FONT} fontSize={0.12} color="#0b1526" position={[0, 0.62, 0.72]} anchorY="middle">
@@ -1369,12 +1372,15 @@ export function Warehouse() {
   const level = useUi((s) => s.level);
   const focus = useUi((s) => s.focus);
   const walk = useUi((s) => s.walk);
+  const spelers = useSpelers();
+  const me = useCall((s) => s.me);
+  const loopt = useMemo(() => (walk && me ? [...spelers, me] : spelers), [walk, me, spelers]);
   const taken = useHq((s) => s.taken);
   const live = useHq((s) => s.live);
   const online = useHq((s) => s.online);
   const takenOk = useHq((s) => takenStand(s).ok);
   const byOwner = useMemo(() => tasksByOwner(taken), [taken]);
-  const ctxFor = (f?: FloorModel): Ctx => ({ byOwner, live, active: walk || (!!f && f.level === level), focus, level: f?.level ?? 0, takenOk, walk });
+  const ctxFor = (f?: FloorModel): Ctx => ({ byOwner, live, active: walk || (!!f && f.level === level), focus, level: f?.level ?? 0, takenOk, walk, loopt });
   const inkom = floors.find((f) => zoneKind(f) === 'inkom');
   const lounge = floors.find((f) => zoneKind(f) === 'lounge');
   const directie = floors.find((f) => zoneKind(f) === 'directie');

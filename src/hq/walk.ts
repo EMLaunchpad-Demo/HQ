@@ -5,6 +5,9 @@ import * as THREE from 'three';
 /** Waar je voeten staan (wereldcoördinaten). Deuren en het label van de ruimte lezen dit. */
 export const walkPos = new THREE.Vector3(0, 0, 0);
 
+/** Waar je mannetje naartoe kijkt, hoe snel het loopt (0 = stil, 1 = wandelen) en hoe ver de camera erachter staat. */
+export const walkHoofd = { ry: 0, snel: 0, camAfstand: 2.9, camMax: 2.9 };
+
 export const BODY_R = 0.26;
 export const STEP = 0.3;
 export const HEAD = 1.82;
@@ -19,6 +22,8 @@ export interface Blok {
   sin: number;
   bottom: number;
   top: number;
+  /** Glas: de camera mag erdoor kijken. */
+  glas?: boolean;
 }
 
 const CEL = 4;
@@ -56,6 +61,19 @@ export class Botsingen {
       if (Math.abs(lx) <= b.hx + 0.04 && Math.abs(lz) <= b.hz + 0.04) best = b.top;
     }
     return best;
+  }
+
+  /** Zit dit punt in een muur, plafond of groot meubel? Voor de camera achter je mannetje. */
+  raakt(x: number, y: number, z: number): boolean {
+    for (const b of this.near(x, z)) {
+      if (b.glas || Math.max(b.hx, b.hz) < 1.4 || y < b.bottom - 0.14 || y > b.top + 0.14) continue;
+      const dx = x - b.x;
+      const dz = z - b.z;
+      const lx = dx * b.cos - dz * b.sin;
+      const lz = dx * b.sin + dz * b.cos;
+      if (Math.abs(lx) <= b.hx + 0.1 && Math.abs(lz) <= b.hz + 0.1) return true;
+    }
+    return false;
   }
 
   /** Duwt je lichaam uit alles waar je tegenaan loopt, zodat je langs muren schuift in plaats van vast te lopen. */
@@ -155,11 +173,11 @@ export function bouwBotsingen(scene: THREE.Object3D, extra: Blok[] = []): Botsin
               inst.fromArray(u.instanceMatrix.array, i * 16);
               world.multiplyMatrices(u.matrixWorld, inst);
               const b = blokVan(box, world);
-              if (b) col.add(b);
+              if (b) col.add({ ...b, glas: !!m.transparent });
             }
           } else {
             const b = blokVan(box, u.matrixWorld);
-            if (b) col.add(b);
+            if (b) col.add({ ...b, glas: !!m.transparent });
           }
         }
       }

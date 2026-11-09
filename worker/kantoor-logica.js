@@ -326,6 +326,27 @@ export function teSluiten(lijst, wie, max = MAX_PER_PERSOON) {
   return mijn.slice(0, Math.max(0, mijn.length - (max - 1))).map((s) => s.sid);
 }
 
+/** Grootste bericht over "samen in het HQ": posities en spelzetten zijn klein. */
+export const MAX_WERELD = 4096;
+const WERELD_SOORTEN = new Set(['pos', 'weg', 'pp', 'pool']);
+
+/**
+ * Een bericht over wie waar rondloopt of wat er aan een speltafel gebeurt. Het kantoor stuurt het enkel door naar de
+ * anderen en bewaart niets. `van` komt altijd uit de login, nooit uit het bericht. Geeft { soort, d } of null.
+ */
+export function valideerWereld(raw) {
+  if (typeof raw !== 'string' || raw.length > MAX_WERELD || !raw.startsWith('{"wereld":')) return null;
+  let m;
+  try {
+    m = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  const w = m?.wereld;
+  if (!isObject(w) || !WERELD_SOORTEN.has(w.soort) || !isObject(w.d)) return null;
+  return { soort: w.soort, d: w.d };
+}
+
 /** Wie er in het HQ is: per persoon, online zodra er minstens één tabblad verbonden is. */
 export function aanwezig(lijst) {
   return [...new Set(lijst.map((s) => s.wie))].sort();

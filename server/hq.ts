@@ -84,6 +84,7 @@ interface KantoorLogica {
   bijVerbinden(lijst: Verbinding[], sid: string, opties: Hervat): Gevolg;
   teSluiten(lijst: Verbinding[], wie: string): string[];
   aanwezig(lijst: Verbinding[]): string[];
+  valideerWereld(raw: string): { soort: string; d: Json } | null;
 }
 
 /** Laadt de gedeelde regels als JavaScript-module, zodat online en lokaal precies hetzelfde doen. */
@@ -462,6 +463,12 @@ export function createHq(root: string, notionToken?: string) {
   function ontvang(L: KantoorLogica, sid: string, raw: string): Gevolg | null {
     const x = kamer.get(sid);
     if (!x) return null;
+    const wereld = L.valideerWereld(raw);
+    if (wereld) {
+      // Posities en spelzetten: doorgeven aan de anderen, zoals het Durable Object online.
+      for (const [sid2, y] of kamer) if (sid2 !== sid) y.kanaal.stuur({ event: 'wereld', data: { van: x.v.wie, ...wereld } });
+      return { leveringen: [], wijzigingen: [] };
+    }
     const b = L.valideerBericht(raw, x.v.wie, bekend);
     if (!b) return null; // ongeldig of onbekend: negeren
     const g = L.routeer(lijst(), sid, b);

@@ -19,9 +19,17 @@ export interface UiState {
   walkSpot: string;
   /** Naam van de ruimte waar je nu staat. */
   walkRoom: string;
+  /** Camera: over je schouder of door je eigen ogen. */
+  walkView: 'derde' | 'eerste';
+  /** Wat je hier kan doen: 'pingpong', 'pool' of 'bel:<id>'. */
+  walkHint: string;
+  /** Korte melding onderaan. */
+  walkMelding: string;
+  /** Aan welke speltafel je speelt. */
+  spel: 'pingpong' | 'pool' | null;
 }
 
-let state: UiState = { level: -1, focus: null, hoverLevel: null, aim: 0, walk: false, walkPaused: false, walkDrag: false, walkSpot: '-1', walkRoom: '' };
+let state: UiState = { level: -1, focus: null, hoverLevel: null, aim: 0, walk: false, walkPaused: false, walkDrag: false, walkSpot: '-1', walkRoom: '', walkView: 'derde', walkHint: '', walkMelding: '', spel: null };
 const subs = new Set<() => void>();
 
 export const ui = {
