@@ -22,6 +22,9 @@
   // FOUNDERS: e-mailadres uit de login → id in team.config.json. Een nieuwe persoon: hier toevoegen én in de Access-policy.
   // DEV_ZONDER_LOGIN hoort hier NOOIT: dat zet enkel `npm run hq:cloud-test` (op localhost).
   "vars": {
+    // SHA-256 van de sleutels waarmee een pc meldt wat de agents doen (de sleutel zelf staat enkel op die pc,
+    // %LOCALAPPDATA%/em-ai-team/hq-online.json). Meerdere pc's: komma ertussen.
+    "AGENT_SLEUTELS": "017c3d5142cbcda21ba447cb03b57afc3c504ac7f46f8713c8d21321ad81f2da",
     "ACCESS_TEAM_DOMAIN": "weathered-boat-3ff0.cloudflareaccess.com",
     "ACCESS_AUD": "f2d5955a908c73c1ac031cc15c83ebca772cae778eb177545433cc64267c46be",
     "FOUNDERS": "{\"martijn@emlaunchpad.com\":\"martijn\",\"ebert@emlaunchpad.com\":\"ebert\",\"ebert.vanbrabant@emlaunchpad.onmicrosoft.com\":\"ebert\"}"

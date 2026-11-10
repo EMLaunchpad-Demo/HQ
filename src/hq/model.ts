@@ -3,6 +3,8 @@
 import { useSyncExternalStore } from 'react';
 import { config } from '../config';
 import { onActivity } from '../live';
+import { opAgentWerk } from './activiteitBus';
+import { schoneTaak } from './taakTekst';
 import type { Agent, HqFloor, LiveEvent } from '../types';
 
 export interface HqTaak {
@@ -350,7 +352,12 @@ export function startHqData() {
         const base: LiveWork = !w || w.done ? { task: w?.done ? w.task : '', since: now, steps: 0 } : w;
         return { live: { ...s.live, [agent]: { ...f(base), at: now } } };
       });
-    if (e.t === 'start') hqStore.set((s) => ({ live: { ...s.live, [e.agent]: { task: e.task, since: now, steps: 0, at: now } } }));
+    if (e.t === 'start') {
+      const taak = schoneTaak(e.task);
+      // Een melding dat een collega klaar is, is geen nieuwe taak: hij werkt verder aan wat hij deed.
+      if (taak === null) upd(e.agent, (w) => w);
+      else hqStore.set((s) => ({ live: { ...s.live, [e.agent]: { task: taak, since: now, steps: 0, at: now } } }));
+    }
     else if (e.t === 'stap') upd(e.agent, (w) => ({ ...w, doing: e.doing, steps: (w.steps ?? 0) + 1 }));
     else if (e.t === 'voortgang') upd(e.agent, (w) => ({ ...w, plan: { done: e.done, total: e.total } }));
     else if (e.t === 'plan')
@@ -369,6 +376,8 @@ export function startHqData() {
   // Live berichten die intussen binnenkomen, wachten tot dat ingelezen is. Online bestaat dit niet (404): gewoon live.
   let wacht: LiveEvent[] | null = [];
   onActivity((e) => (wacht ? wacht.push(e) : apply(e)));
+  // Online: wat de agents doen komt via het kantoor binnen (de hook op de pc meldt het aan de Worker).
+  opAgentWerk((e) => (wacht ? wacht.push(e) : apply(e)));
   void fetch('/hq/activiteit', { cache: 'no-store', signal: AbortSignal.timeout(8_000) })
     .then((r) => (r.ok ? r.json() : []))
     .catch(() => [])

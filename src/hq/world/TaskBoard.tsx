@@ -16,9 +16,19 @@ const STATUS_COLOR: Record<string, string> = {
 
 const cut = (s: string, n: number) => (s.length > n ? s.slice(0, n - 1).trimEnd() + '…' : s);
 
-export function TaskBoard({ title, subtitle, tasks, w = 3.6, h = 2.1 }: { title: string; subtitle: string; tasks: HqTaak[]; w?: number; h?: number }) {
+/** Wat een agent op dit moment doet, live uit Claude Code (zie WerkBallon). */
+export interface NuRegel {
+  wie: string;
+  tekst: string;
+  pct: number | null;
+}
+
+export function TaskBoard({ title, subtitle, tasks, w = 3.6, h = 2.1, nu = [] }: { title: string; subtitle: string; tasks: HqTaak[]; w?: number; h?: number; nu?: NuRegel[] }) {
   const p = progress(tasks);
-  const top = useMemo(() => tasks.filter(isOpen).slice(0, 5), [tasks]);
+  const nuZicht = nu.slice(0, 3);
+  // Elke live regel schuift de lijst wat op; er passen er samen zes op het scherm.
+  const dy = nuZicht.length ? 0.1 + nuZicht.length * 0.2 : 0;
+  const top = useMemo(() => tasks.filter(isOpen).slice(0, Math.max(1, 5 - Math.ceil(dy / 0.26))), [tasks, dy]);
   const grad = brandGradientTex();
   const bg = useMemo(() => new THREE.MeshStandardMaterial({ color: '#0b1526', emissive: '#0b1526', emissiveIntensity: 0.6, roughness: 0.3 }), []);
   const pad = 0.16;
@@ -71,24 +81,42 @@ export function TaskBoard({ title, subtitle, tasks, w = 3.6, h = 2.1 }: { title:
           {stand.tekst.toUpperCase()}
         </Text>
       )}
+      {/* Live: wat de agents nu doen */}
+      {nuZicht.map((r, i) => {
+        const y = h / 2 - 0.5 - i * 0.2;
+        return (
+          <group key={r.wie + i} position={[0, y, 0.01]}>
+            <mesh position={[left + 0.04, -0.045, 0]}>
+              <circleGeometry args={[0.03, 14]} />
+              <meshBasicMaterial color="#2ff0a6" toneMapped={false} />
+            </mesh>
+            <Text font={FONT_MONO} fontSize={0.06} color="#2ff0a6" anchorX="left" anchorY="top" position={[left + 0.12, 0, 0]} letterSpacing={0.06}>
+              {`NU · ${r.wie.toUpperCase()}${r.pct !== null ? ` · ${r.pct}%` : ''}`}
+            </Text>
+            <Text font={FONT_REGULAR} fontSize={0.078} color="#ffffff" anchorX="left" anchorY="top" position={[left + 0.12, -0.075, 0]}>
+              {cut(r.tekst, Math.round(w * 13))}
+            </Text>
+          </group>
+        );
+      })}
       {/* Voortgang */}
-      <mesh position={[0, h / 2 - 0.55, 0.004]}>
+      <mesh position={[0, h / 2 - 0.55 - dy, 0.004]}>
         <planeGeometry args={[w - pad * 2, 0.035]} />
         <meshBasicMaterial color="#1e2a3a" />
       </mesh>
       {p.total > 0 && (
-        <mesh position={[left + ((w - pad * 2) * p.pct) / 200, h / 2 - 0.55, 0.006]}>
+        <mesh position={[left + ((w - pad * 2) * p.pct) / 200, h / 2 - 0.55 - dy, 0.006]}>
           <planeGeometry args={[((w - pad * 2) * p.pct) / 100 || 0.001, 0.035]} />
           <meshBasicMaterial map={grad} toneMapped={false} />
         </mesh>
       )}
       {top.length === 0 && (
-        <Text font={FONT_REGULAR} fontSize={0.1} color={stand.ok ? '#7c8a97' : '#ff8a6a'} anchorX="left" anchorY="top" position={[left, h / 2 - 0.7, 0.01]}>
+        <Text font={FONT_REGULAR} fontSize={0.1} color={stand.ok ? '#7c8a97' : '#ff8a6a'} anchorX="left" anchorY="top" position={[left, h / 2 - 0.7 - dy, 0.01]}>
           {stand.ok ? 'Geen open taken. Alles is bij.' : stand.tekst.endsWith('…') ? stand.tekst : `${stand.tekst}.`}
         </Text>
       )}
       {top.map((t, i) => {
-        const y = h / 2 - 0.7 - i * 0.26;
+        const y = h / 2 - 0.7 - dy - i * 0.26;
         const c = STATUS_COLOR[t.status] ?? '#7c8a97';
         return (
           <group key={t.id} position={[0, y, 0.01]}>

@@ -7,6 +7,8 @@
 // /hq/taken    taken uit Notion (geheim NOTION_TOKEN); bij een Notion-fout de laatst goede lijst, gemarkeerd als verouderd
 // /hq/ice      ICE-servers voor de videocall: TURN van Cloudflare als TURN_KEY_ID en TURN_KEY_API_TOKEN gezet zijn, anders enkel STUN
 // /hq/signaal  WebSocket naar het Durable Object "Kantoor": aanwezigheid en call-berichtjes (regels in kantoor-logica.js)
+// /hq/agent    POST van de hook op de pc van een founder (sleutel, geen login): wat de agents nu doen
+// /hq/activiteit  wat de agents de laatste uren deden (uit het kantoor), voor wie het HQ opent
 // /activity    bestaat online niet (het activiteitslog staat op de pc); 204 = de browser stopt met proberen.
 import { DurableObject } from 'cloudflare:workers';
 import { controleerAccess, founderIds } from './access.js';
@@ -22,6 +24,7 @@ import {
   SLUIT_VERLOPEN,
   teSluiten,
   valideerBericht,
+  valideerActiviteit,
   valideerWereld,
 } from './kantoor-logica.js';
 
@@ -282,14 +285,56 @@ async function hq(request, env, ctx, url, ik) {
       return request.method === 'GET' ? ice(env) : nietToegestaan();
     case '/hq/signaal':
       return signaal(request, env, url, ik);
+    case '/hq/activiteit':
+      return request.method === 'GET' ? env.KANTOOR.get(env.KANTOOR.idFromName('hq')).fetch('https://kantoor.intern/activiteit') : nietToegestaan();
     default:
       return json({ fout: 'Niet gevonden.' }, 404);
   }
 }
 
+/** Vergelijkt zonder vroeg te stoppen, zodat de tijd niets verraadt over de sleutel. */
+function gelijk(a, b) {
+  if (a.length !== b.length) return false;
+  let v = 0;
+  for (let i = 0; i < a.length; i++) v |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return v === 0;
+}
+
+/**
+ * De hook op de pc van een founder meldt wat de agents doen. Geen login van Access (een script kan niet inloggen),
+ * wel een eigen sleutel: in wrangler.jsonc staat enkel de SHA-256 ervan (AGENT_SLEUTELS), de sleutel zelf blijft op de pc.
+ */
+async function agentIn(request, env) {
+  if (request.method !== 'POST') return nietToegestaan();
+  const hashes = String(env.AGENT_SLEUTELS ?? '')
+    .split(',')
+    .map((x) => x.trim().toLowerCase())
+    .filter((x) => /^[0-9a-f]{64}$/.test(x));
+  if (!hashes.length) return json({ fout: 'Niet ingesteld.' }, 503);
+  const m = /^Bearer\s+([A-Za-z0-9_-]{20,200})$/.exec(request.headers.get('Authorization') ?? '');
+  if (!m) return json({ fout: 'Geen toegang.' }, 401);
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(m[1]));
+  const hex = [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
+  if (!hashes.some((h) => gelijk(h, hex))) return json({ fout: 'Geen toegang.' }, 401);
+  const tekst = await request.text();
+  if (tekst.length > 16_000) return json({ fout: 'Te groot.' }, 413);
+  let lijst;
+  try {
+    lijst = JSON.parse(tekst);
+  } catch {
+    return json({ fout: 'Ongeldig.' }, 400);
+  }
+  const nu = Date.now();
+  const goed = (Array.isArray(lijst) ? lijst : [lijst]).slice(0, 20).map((e) => valideerActiviteit(e, nu)).filter(Boolean);
+  if (!goed.length) return json({ ok: true, aantal: 0 });
+  const stub = env.KANTOOR.get(env.KANTOOR.idFromName('hq'));
+  return stub.fetch(new Request('https://kantoor.intern/agent', { method: 'POST', body: JSON.stringify(goed) }));
+}
+
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
+    if (url.pathname === '/hq/agent') return agentIn(request, env);
     const ik = await wieBenJe(request, env, url);
     if (!ik.ok) return ik.tijdelijk ? evenNiet(url) : geenToegang(url);
     if (url.pathname.startsWith('/hq/')) return hq(request, env, ctx, url, ik);
@@ -353,6 +398,10 @@ export class Kantoor extends DurableObject {
   }
 
   async fetch(request) {
+    // Intern, enkel via de Worker: wat de agents doen bewaren en doorgeven.
+    const pad = new URL(request.url).pathname;
+    if (pad === '/agent' && request.method === 'POST') return this.agentWerk(await request.json());
+    if (pad === '/activiteit') return json(await this.recentWerk());
     const h = request.headers;
     const wie = h.get('X-HQ-Wie') ?? '';
     const sid = h.get('X-HQ-Sid') ?? '';
@@ -447,6 +496,22 @@ export class Kantoor extends DurableObject {
     const open = this.verbindingen(zonder);
     const msg = JSON.stringify({ event: 'aanwezig', data: aanwezig(open.map((v) => v.a)) });
     for (const v of open) stuur(v.ws, msg);
+  }
+
+  /** De laatste uren werk van de agents, zodat wie het HQ opent meteen ziet wie bezig is. */
+  async recentWerk() {
+    const grens = new Date(Date.now() - 6 * 3600_000).toISOString();
+    const lijst = (await this.ctx.storage.get('werk')) ?? [];
+    return lijst.filter((e) => e.tijd >= grens);
+  }
+
+  async agentWerk(nieuw) {
+    if (!Array.isArray(nieuw) || !nieuw.length) return json({ ok: true, aantal: 0 });
+    const lijst = [...(await this.recentWerk()), ...nieuw].slice(-400);
+    await this.ctx.storage.put('werk', lijst);
+    const msg = JSON.stringify({ event: 'activiteit', data: nieuw });
+    for (const v of this.verbindingen()) stuur(v.ws, msg);
+    return json({ ok: true, aantal: nieuw.length });
   }
 
   webSocketMessage(ws, raw) {

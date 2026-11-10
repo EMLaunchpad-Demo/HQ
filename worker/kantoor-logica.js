@@ -347,6 +347,38 @@ export function valideerWereld(raw) {
   return { soort: w.soort, d: w.d };
 }
 
+/** Wat de agents doen (van de hook op de pc van een founder): enkel deze soorten en velden gaan verder. */
+const ACT_SOORTEN = new Set(['start', 'stap', 'voortgang', 'plan', 'done', 'error', 'memory', 'delegate']);
+const ACT_ID = /^[a-z0-9-]{1,40}$/;
+const tekstKort = (x, n) => (typeof x === 'string' ? x.replace(/\s+/g, ' ').trim().slice(0, n) : '');
+const getal = (x) => (Number.isInteger(x) && x >= 0 && x <= 999 ? x : 0);
+
+/** Eén activiteit nakijken. Geeft een propere kopie met de tijd van het kantoor terug, of null. */
+export function valideerActiviteit(e, nu = Date.now()) {
+  if (!isObject(e) || !ACT_SOORTEN.has(e.t)) return null;
+  const wie = e.t === 'delegate' ? e.to : e.agent;
+  if (typeof wie !== 'string' || !ACT_ID.test(wie)) return null;
+  const tijd = new Date(nu).toISOString();
+  switch (e.t) {
+    case 'start':
+      return { t: 'start', agent: wie, task: tekstKort(e.task, 160), tijd };
+    case 'delegate':
+      return { t: 'delegate', to: wie, task: tekstKort(e.task, 160), tijd };
+    case 'stap':
+      return { t: 'stap', agent: wie, doing: tekstKort(e.doing, 80), tijd };
+    case 'voortgang':
+      return { t: 'voortgang', agent: wie, done: getal(e.done), total: getal(e.total), tijd };
+    case 'plan':
+      return e.op === 'nieuw' || e.op === 'klaar' ? { t: 'plan', agent: wie, op: e.op, tijd } : null;
+    case 'done':
+      return { t: 'done', agent: wie, result: tekstKort(e.result, 160), tijd };
+    case 'error':
+      return { t: 'error', agent: wie, message: tekstKort(e.message, 160), tijd };
+    default:
+      return { t: 'memory', agent: wie, file: tekstKort(e.file, 60), tijd };
+  }
+}
+
 /** Wie er in het HQ is: per persoon, online zodra er minstens één tabblad verbonden is. */
 export function aanwezig(lijst) {
   return [...new Set(lijst.map((s) => s.wie))].sort();

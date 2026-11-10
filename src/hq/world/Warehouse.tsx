@@ -17,7 +17,9 @@ import { Character, MOOD_COLOR, type Mood } from './Character';
 import { Booth, Chair, CoffeeTable, Desk, MeetingTable, Plant, Planter, Rug, Shelf, Sofa } from './Furniture';
 import { Gaming, PingPong, PoolTable } from './Lounge';
 import { ArenaCourt, BrandWall, FacadeLogos, FloorLogo, Fitness, Kitchen, KitchenLounge, MezzLed, Studio } from './Extras';
-import { TaskBoard } from './TaskBoard';
+import { TaskBoard, type NuRegel } from './TaskBoard';
+import { KLAAR_MS, WerkBallon } from './WerkBallon';
+import { kort } from '../taakTekst';
 import { B, ROOM_H, glassMat, steelMat } from './dims';
 import { CUT, CutContext, useCut, type Cut } from './cut';
 import { DOOR_H, GlassFront, SlideDoor } from './parts';
@@ -28,6 +30,23 @@ const { W, D, H, RISE, MZ, MD } = B;
 const IX = W / 2 - MD; // binnenrand van de tussenverdieping (x)
 const IZ = D / 2 - MD; // binnenrand (z)
 const LIVE_MS = 30 * 60_000;
+
+/** Werkt deze agent nu (of is hij net klaar)? Dan staat er een ballon boven zijn hoofd. */
+function zichtbaarWerk(w: LiveWork | undefined, nu = Date.now()) {
+  if (!w) return false;
+  const t = w.at ?? w.since;
+  return w.done ? nu - t < KLAAR_MS : nu - t < LIVE_MS;
+}
+/** Live regels voor een scherm: wie van deze mensen nu bezig is, met zijn taak en wat hij doet. */
+function nuRegels(ids: { id: string; name: string }[], live: Record<string, LiveWork>): NuRegel[] {
+  const nu = Date.now();
+  return ids
+    .filter(({ id }) => zichtbaarWerk(live[id], nu) && !live[id].done)
+    .map(({ id, name }) => {
+      const w = live[id];
+      return { wie: name, tekst: `${w.task || 'Aan het werk'}${w.doing ? ` · ${kort(w.doing, 36)}` : ''}`, pct: livePct(w) };
+    });
+}
 const seatPos = new THREE.Vector3();
 /** Plaats van de zijdeur van de kantoren (lokaal z), vlak achter de glazen voorkant. */
 const OFFICE_DOOR_Z = 1.25;
@@ -204,8 +223,18 @@ function Seat({ o, mood, ctx, big, pose = 'zit' }: { o: Occupant; mood: Mood; ct
     if (near ? d > 9 : d < 7.5) setNear(!near);
   });
   const shown = ctx.walk ? near : ctx.active;
+  const werk = o.kind === 'rol' ? undefined : ctx.live[o.id];
+  const ballon = zichtbaarWerk(werk);
+  // Ververs af en toe, zodat de ballon verdwijnt als het werk voorbij is.
+  const [, tik] = useState(0);
+  useEffect(() => {
+    if (!ballon) return;
+    const t = setInterval(() => tik((x) => x + 1), 20_000);
+    return () => clearInterval(t);
+  }, [ballon]);
   return (
     <group ref={root} position-z={pose === 'zit' ? 0.62 : 0} userData={{ noMerge: true }}>
+      {ballon && werk && <WerkBallon naam={o.name} w={werk} y={pose === 'zit' ? 2.0 : 2.5} />}
       <Character
         id={o.id}
         name={o.name}
@@ -213,8 +242,8 @@ function Seat({ o, mood, ctx, big, pose = 'zit' }: { o: Occupant; mood: Mood; ct
         mood={mood}
         pose={pose}
         working={mood === 'bezig'}
-        label={ctx.walk ? near && o.kind !== 'rol' : !!status || (ctx.active && (o.kind === 'hoofd' || o.kind === 'cos' || o.kind === 'mens'))}
-        status={status}
+        label={!ballon && (ctx.walk ? near && o.kind !== 'rol' : !!status || (ctx.active && (o.kind === 'hoofd' || o.kind === 'cos' || o.kind === 'mens')))}
+        status={ballon ? undefined : status}
         big={big}
         selected={ctx.focus === o.id}
         lite={!shown}
@@ -481,11 +510,11 @@ function DeptRoom({ floor, room, ctx }: { floor: FloorModel; room: Room; ctx: Ct
       </group>
       {/* Takenbord aan de achtermuur */}
       <group position={[room.w / 2 - 2.6, 1.95, -room.d / 2 + 0.08]}>
-        <TaskBoard title={groups[0]?.label ?? floor.label} subtitle={`${groups[0]?.members[0]?.name ?? ''} · ${floor.label}`} tasks={boardTasks} w={3.8} h={2.1} />
+        <TaskBoard title={groups[0]?.label ?? floor.label} subtitle={`${groups[0]?.members[0]?.name ?? ''} · ${floor.label}`} tasks={boardTasks} w={3.8} h={2.1} nu={nuRegels(groups[0]?.members.slice(0, 1) ?? [], ctx.live)} />
       </group>
       {groups.length > 1 && (
         <group position={[-room.w / 2 + 3.4, 1.95, -room.d / 2 + 0.08]}>
-          <TaskBoard title={groups[1].label} subtitle={groups[1].members[0]?.name ?? ''} tasks={ctx.byOwner[groups[1].members[0]?.id ?? ''] ?? []} w={3.8} h={2.1} />
+          <TaskBoard title={groups[1].label} subtitle={groups[1].members[0]?.name ?? ''} tasks={ctx.byOwner[groups[1].members[0]?.id ?? ''] ?? []} w={3.8} h={2.1} nu={nuRegels(groups[1].members.slice(0, 1), ctx.live)} />
         </group>
       )}
       {/* Bureaus */}
@@ -1537,7 +1566,14 @@ function Arena({ inkom, lounge, ctx, loungeCtx, taken }: { inkom?: FloorModel; l
             </mesh>
           ))}
           <group position-y={2.3}>
-            <TaskBoard title={title as string} subtitle={sub as string} tasks={tasks as HqTaak[]} w={4.2} h={2.3} />
+            <TaskBoard
+              title={title as string}
+              subtitle={sub as string}
+              tasks={tasks as HqTaak[]}
+              w={4.2}
+              h={2.3}
+              nu={(x as number) < 0 ? nuRegels([...(cos ? [cos] : []), ...config.departments.map((d) => ({ id: d.agent.id, name: d.agent.name }))], ctx.live) : []}
+            />
           </group>
         </group>
       ))}

@@ -5,6 +5,7 @@
 import { useSyncExternalStore } from 'react';
 import { hqStore, humans, loginVerlopen, meldVerlopen } from './model';
 import { startBel, stopBel } from './bel';
+import { meldAgentWerk } from './activiteitBus';
 
 export type CallStatus = 'idle' | 'uitgaand' | 'inkomend' | 'verbinden' | 'verbonden';
 
@@ -426,6 +427,7 @@ function onSocketBericht(x: unknown) {
   if (!isObj(x)) return;
   if (x.event === 'aanwezig') return zetAanwezig(x.data);
   if (x.event === 'wereld') return opWereld(x.data);
+  if (x.event === 'activiteit') return meldAgentWerk(x.data);
   if (x.event === 'welkom') return opWelkom(x.data);
   if (x.event === 'verhuisd') return opVerhuisd(x.data);
   if (x.event === 'niet-online') {
